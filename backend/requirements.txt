@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-multipart
+rocketpy>=1.12
+rocketserializer
+jpype1
+orhelper
+beautifulsoup4
+lxml
+numpy
+plotly
+pydantic

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import axios from 'axios';
 import FileUpload from './components/FileUpload';
 import LaunchConfigForm from './components/LaunchConfig';
+import { ComparisonTable } from './components/ComparisonTable';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { ComparisonResponse } from './types';
 
@@ -118,12 +119,7 @@ export default function App() {
         {appState === 'error' && <ErrorBox message={errorMessage} />}
         {appState === 'results' && results && (
           <div className="space-y-6">
-            <div
-              id="comparison-table-placeholder"
-              className="bg-gray-900 rounded-xl p-4 text-gray-400"
-            >
-              Comparison table loading…
-            </div>
+            <ComparisonTable orResults={results.or_results} rocketPyResults={results.rocketpy_results} />
             <div
               id="charts-placeholder"
               className="bg-gray-900 rounded-xl p-4 text-gray-400"

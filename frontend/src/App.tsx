@@ -3,6 +3,7 @@ import axios from 'axios';
 import FileUpload from './components/FileUpload';
 import LaunchConfigForm from './components/LaunchConfig';
 import { ComparisonTable } from './components/ComparisonTable';
+import { TimeSeriesCharts } from './components/TimeSeriesCharts';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { ComparisonResponse } from './types';
 
@@ -120,12 +121,10 @@ export default function App() {
         {appState === 'results' && results && (
           <div className="space-y-6">
             <ComparisonTable orResults={results.or_results} rocketPyResults={results.rocketpy_results} />
-            <div
-              id="charts-placeholder"
-              className="bg-gray-900 rounded-xl p-4 text-gray-400"
-            >
-              Charts loading…
-            </div>
+            <TimeSeriesCharts
+              orTimeseries={results.or_results.timeseries}
+              rocketPyTimeseries={results.rocketpy_results.timeseries}
+            />
             <div
               id="trajectory-placeholder"
               className="bg-gray-900 rounded-xl p-4 text-gray-400"

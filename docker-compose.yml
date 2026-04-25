@@ -8,7 +8,8 @@ services:
     volumes:
       - ./backend:/app
     environment:
-      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      - JAVA_HOME=/opt/java/openjdk
+      - OR_JAR_PATH=/opt/OpenRocket-23.09.jar
 
   frontend:
     image: node:20-slim
@@ -17,4 +18,8 @@ services:
       - ./frontend:/app
     ports:
       - "5173:5173"
+    environment:
+      - API_TARGET=http://backend:8000
+    depends_on:
+      - backend
     command: sh -c "npm install && npm run dev -- --host"

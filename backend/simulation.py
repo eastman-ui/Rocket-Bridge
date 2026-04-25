@@ -85,56 +85,71 @@ def run_rocketpy(
     # ------------------------------------------------------------------
     # 2. SolidMotor
     # ------------------------------------------------------------------
-    motor_params = params["motors"][0]
+    motor_params = params["motors"]
+    logger.info("motor_params type=%s value=%s", type(motor_params), motor_params)
 
     thrust_csv = _resolve(motor_params["thrust_source"], output_dir)
 
-    motor = SolidMotor(
-        thrust_source=thrust_csv,
-        dry_mass=motor_params["dry_mass"],
-        dry_inertia=tuple(motor_params["dry_inertia"]),
-        nozzle_radius=motor_params["nozzle_radius"],
-        grain_number=motor_params["grain_number"],
-        grain_density=motor_params["grain_density"],
-        grain_outer_radius=motor_params["grain_outer_radius"],
-        grain_initial_inner_radius=motor_params["grain_initial_inner_radius"],
-        grain_initial_height=motor_params["grain_initial_height"],
-        grain_separation=motor_params["grain_separation"],
-        grains_center_of_mass_position=motor_params["grains_center_of_mass_position"],
-        center_of_dry_mass_position=motor_params["center_of_dry_mass_position"],
-    )
+    try:
+        motor = SolidMotor(
+            thrust_source=thrust_csv,
+            dry_mass=motor_params["dry_mass"],
+            dry_inertia=tuple(motor_params["dry_inertia"]),
+            nozzle_radius=motor_params["nozzle_radius"],
+            grain_number=motor_params["grain_number"],
+            grain_density=motor_params["grain_density"],
+            grain_outer_radius=motor_params["grain_outer_radius"],
+            grain_initial_inner_radius=motor_params["grain_initial_inner_radius"],
+            grain_initial_height=motor_params["grain_initial_height"],
+            grain_separation=motor_params["grain_separation"],
+            grains_center_of_mass_position=motor_params["grains_center_of_mass_position"],
+            center_of_dry_mass_position=motor_params["center_of_dry_mass_position"],
+        )
+    except Exception:
+        import traceback as _tb
+        logger.error("SolidMotor failed\nthrust_csv=%s\nmotor_params=%s\n%s",
+                     thrust_csv, motor_params, _tb.format_exc())
+        raise
 
     # ------------------------------------------------------------------
     # 3. Rocket
     # ------------------------------------------------------------------
     rkt_params = params["rocket"]
 
-    power_off_drag = _resolve(rkt_params["power_off_drag"], output_dir)
-    power_on_drag = _resolve(rkt_params["power_on_drag"], output_dir)
+    drag_csv = _resolve(rkt_params["drag_curve"], output_dir)
 
     rocket = Rocket(
         radius=rkt_params["radius"],
         mass=rkt_params["mass"],
         inertia=tuple(rkt_params["inertia"]),
-        power_off_drag=power_off_drag,
-        power_on_drag=power_on_drag,
-        center_of_mass_without_motor=rkt_params["center_of_mass_without_motor"],
+        power_off_drag=drag_csv,
+        power_on_drag=drag_csv,
+        center_of_mass_without_motor=rkt_params["center_of_mass_without_propellant"],
     )
 
-    # Motor
-    rocket.add_motor(motor, position=rkt_params["motor_position"])
+    # Motor — position stored in motor_params
+    rocket.add_motor(motor, position=motor_params["position"])
 
-    # Nosecones
-    for nc in params.get("nosecones", []):
+    # Nosecones — single dict or dict-of-dicts
+    nosecones_raw = params.get("nosecones", {})
+    if isinstance(nosecones_raw, dict) and nosecones_raw:
+        nc_list = [nosecones_raw] if "length" in nosecones_raw else list(nosecones_raw.values())
+    else:
+        nc_list = nosecones_raw if isinstance(nosecones_raw, list) else []
+    for nc in nc_list:
+        kind_raw = nc.get("kind", nc.get("shape", "ogive"))
+        kind_norm = kind_raw.lower().replace(" ", "").replace("-", "")
         rocket.add_nose(
             length=nc["length"],
-            kind=nc.get("shape", "ogive"),
+            kind=kind_norm,
             position=nc["position"],
             base_radius=nc.get("base_radius"),
         )
 
-    # Trapezoidal fins
-    for fin in params.get("trapezoidal_fins", []):
+    # Trapezoidal fins — empty dict or dict-of-dicts
+    fins_raw = params.get("trapezoidal_fins", {})
+    fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else fins_raw
+    for fin in fin_list:
         rocket.add_trapezoidal_fins(
             n=fin["n"],
             root_chord=fin["root_chord"],
@@ -143,8 +158,10 @@ def run_rocketpy(
             position=fin["position"],
         )
 
-    # Tails (optional)
-    for tail in params.get("tails", []):
+    # Tails — empty list or dict-of-dicts
+    tails_raw = params.get("tails", [])
+    tail_list = list(tails_raw.values()) if isinstance(tails_raw, dict) else tails_raw
+    for tail in tail_list:
         rocket.add_tail(
             top_radius=tail["top_radius"],
             bottom_radius=tail["bottom_radius"],
@@ -152,21 +169,19 @@ def run_rocketpy(
             position=tail["position"],
         )
 
-    # Parachutes
-    for chute in params.get("parachutes", []):
-        trigger_raw = chute["trigger"]
-        # Resolve trigger: "apogee" string or a numeric value
-        if isinstance(trigger_raw, str):
-            try:
-                trigger = float(trigger_raw)
-            except ValueError:
-                trigger = trigger_raw.lower()  # e.g. "apogee"
+    # Parachutes — dict with string int keys {"0": {...}, "1": {...}}
+    parachutes_raw = params.get("parachutes", {})
+    chute_list = list(parachutes_raw.values()) if isinstance(parachutes_raw, dict) else parachutes_raw
+    for chute in chute_list:
+        deploy_event = chute.get("deploy_event", "apogee").lower()
+        deploy_alt = chute.get("deploy_altitude")
+        if deploy_event == "altitude" and deploy_alt is not None:
+            trigger = float(deploy_alt)
         else:
-            trigger = float(trigger_raw)
-
+            trigger = "apogee"
         rocket.add_parachute(
             name=chute["name"],
-            cd_s=chute["cd_s"],
+            cd_s=chute.get("cds", chute.get("cd_s", 1.0)),
             trigger=trigger,
         )
 
@@ -198,7 +213,7 @@ def run_rocketpy(
     max_mach = float(flight.max_mach_number)
     max_acceleration_ms2 = float(flight.max_acceleration)
     out_of_rail_velocity = float(flight.out_of_rail_velocity)
-    burn_out_time_s = float(motor_params["burn_time"])
+    burn_out_time_s = float(motor.burn_out_time)
 
     # Static margin at t=0
     try:

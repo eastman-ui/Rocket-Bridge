@@ -46,9 +46,6 @@ def extract_or_results(ork_path: str, jar_path: str) -> dict:
         import jpype
         import orhelper
 
-        if not jpype.isJVMStarted():
-            jpype.startJVM(classpath=[jar_path])
-
         with orhelper.OpenRocketInstance(jar_path) as instance:
             orh = orhelper.Helper(instance)
             doc = orh.load_doc(ork_path)

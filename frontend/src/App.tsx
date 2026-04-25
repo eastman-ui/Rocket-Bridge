@@ -4,6 +4,7 @@ import FileUpload from './components/FileUpload';
 import LaunchConfigForm from './components/LaunchConfig';
 import { ComparisonTable } from './components/ComparisonTable';
 import { TimeSeriesCharts } from './components/TimeSeriesCharts';
+import { TrajectoryPlot } from './components/TrajectoryPlot';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { ComparisonResponse } from './types';
 
@@ -125,12 +126,12 @@ export default function App() {
               orTimeseries={results.or_results.timeseries}
               rocketPyTimeseries={results.rocketpy_results.timeseries}
             />
-            <div
-              id="trajectory-placeholder"
-              className="bg-gray-900 rounded-xl p-4 text-gray-400"
-            >
-              3D trajectory loading…
-            </div>
+            <TrajectoryPlot
+              trajectory={results.rocketpy_results.trajectory_3d}
+              apogeeAgl={results.rocketpy_results.apogee_m_agl}
+              apogeeTimeS={results.rocketpy_results.apogee_time_s}
+              burnOutTimeS={results.rocketpy_results.burn_out_time_s}
+            />
           </div>
         )}
       </main>

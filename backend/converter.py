@@ -30,12 +30,11 @@ def convert_ork(ork_path: str, output_dir: str) -> dict:
     os.makedirs(output_dir, exist_ok=True)
 
     try:
-        subprocess.run(
-            ["ork2json", "--filepath", ork_path, "--output", output_dir],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        cmd = ["ork2json", "--filepath", ork_path, "--output", output_dir]
+        jar_path = os.environ.get("OR_JAR_PATH")
+        if jar_path:
+            cmd += ["--ork_jar", jar_path]
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
             f"Failed to convert OpenRocket file: {e.stderr or e.stdout or str(e)}"

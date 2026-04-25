@@ -134,6 +134,7 @@ async def simulate(
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
+        logger.exception("Unhandled simulation error")
         raise HTTPException(status_code=500, detail="Simulation failed: " + str(e))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

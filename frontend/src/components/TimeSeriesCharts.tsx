@@ -1,4 +1,5 @@
-import Plot from 'react-plotly.js';
+import PlotlyImport from 'react-plotly.js';
+const Plot = (PlotlyImport as any).default ?? PlotlyImport;
 import type { TimeSeriesData } from '../types';
 
 interface TimeSeriesChartsProps {

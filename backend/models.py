@@ -36,6 +36,7 @@ class RocketPyResults(BaseModel):
     static_margin_cal: float
     static_margin_pct: float
     burn_out_time_s: float
+    weather_source: str = "standard_atmosphere"
     timeseries: TimeSeriesData
     trajectory_3d: Trajectory3D
 

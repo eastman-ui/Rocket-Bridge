@@ -1,7 +1,12 @@
 import json
+import logging
 import os
+import re
 import subprocess
 from pathlib import Path
+import xml.etree.ElementTree as ET
+
+logger = logging.getLogger(__name__)
 
 
 def convert_ork(ork_path: str, output_dir: str) -> dict:
@@ -52,9 +57,110 @@ def convert_ork(ork_path: str, output_dir: str) -> dict:
 
     try:
         with open(params_path, "r") as f:
-            return json.load(f)
+            params = json.load(f)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Failed to parse parameters.json: {e}")
+
+    # Patch in freeform fins that ork2json can't export
+    has_trap = bool(params.get("trapezoidal_fins"))
+    has_ell = bool(params.get("elliptical_fins"))
+    if not has_trap and not has_ell:
+        _inject_freeform_fins(ork_path, params)
+
+    return params
+
+
+def _inject_freeform_fins(ork_path: str, params: dict) -> None:
+    """Parse freeform fins from the .ork XML and add them as trapezoidal approximations."""
+    try:
+        # .ork files can be: plain XML, gzip-compressed XML, or ZIP archive containing rocket.ork XML
+        import gzip, zipfile
+        with open(ork_path, "rb") as f:
+            magic = f.read(4)
+
+        if magic[:2] == b"PK":
+            # ZIP archive — extract the first .ork or .xml entry
+            with zipfile.ZipFile(ork_path) as zf:
+                names = zf.namelist()
+                entry = next((n for n in names if n.endswith(".ork") or n.endswith(".xml")), names[0])
+                content = zf.read(entry).decode("utf-8", errors="replace")
+        elif magic[:2] == b"\x1f\x8b":
+            # gzip-compressed XML
+            with gzip.open(ork_path, "rt", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        else:
+            # plain XML
+            with open(ork_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+
+        fin_sections = re.findall(
+            r"<freeformfinset>(.*?)</freeformfinset>", content, re.DOTALL | re.IGNORECASE
+        )
+        if not fin_sections:
+            return
+
+        trapezoidal_fins = {}
+        for i, section in enumerate(fin_sections):
+            # fin count
+            fc_match = re.search(r"<fincount>(\d+)</fincount>", section, re.IGNORECASE)
+            n = int(fc_match.group(1)) if fc_match else 4
+
+            # axial position (leading edge of root from nose)
+            pos_match = re.search(
+                r'<position[^>]*type=["\']absolute["\'][^>]*>([\d.eE+\-]+)</position>',
+                section, re.IGNORECASE
+            ) or re.search(r"<axialoffset[^>]*>([\d.eE+\-]+)</axialoffset>", section, re.IGNORECASE)
+            position = float(pos_match.group(1)) if pos_match else 0.0
+
+            # fin points: (x=axial, y=radial)
+            pts = re.findall(r'<point\s+x="([\d.eE+\-]+)"\s+y="([\d.eE+\-]+)"', section, re.IGNORECASE)
+            if not pts:
+                continue
+            xs = [float(p[0]) for p in pts]
+            ys = [float(p[1]) for p in pts]
+
+            # Root chord: axial extent of points at y=0
+            root_pts = [(x, y) for x, y in zip(xs, ys) if y < 1e-6]
+            if len(root_pts) >= 2:
+                root_xs = sorted(p[0] for p in root_pts)
+                root_chord = root_xs[-1] - root_xs[0]
+            else:
+                root_chord = max(xs)
+
+            # Span: maximum radial extent
+            span = max(ys)
+
+            # Tip chord: axial extent of points at or near max span
+            tip_pts = [(x, y) for x, y in zip(xs, ys) if abs(y - span) < 1e-5]
+            if len(tip_pts) >= 2:
+                tip_xs = sorted(p[0] for p in tip_pts)
+                tip_chord = tip_xs[-1] - tip_xs[0]
+            else:
+                # approximate from span fraction
+                tip_chord = root_chord * 0.4
+
+            # Sweep: axial distance from root leading edge to tip leading edge
+            if root_pts and tip_pts:
+                root_le_x = min(p[0] for p in root_pts)
+                tip_le_x = min(p[0] for p in tip_pts)
+                sweep_length = tip_le_x - root_le_x
+            else:
+                sweep_length = (root_chord - tip_chord) / 2.0
+
+            trapezoidal_fins[str(i)] = {
+                "n": n,
+                "root_chord": round(root_chord, 6),
+                "tip_chord": round(tip_chord, 6),
+                "span": round(span, 6),
+                "position": round(position, 6),
+                "sweep_length": round(sweep_length, 6),
+            }
+
+        if trapezoidal_fins:
+            params["trapezoidal_fins"] = trapezoidal_fins
+
+    except Exception:
+        pass  # non-fatal — simulation continues without fin approximation
 
 
 def _check_java_17_available() -> None:

@@ -22,8 +22,8 @@ interface MetricRow {
 export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabilityUnit }: ComparisonTableProps) {
   const imp = unitSystem === 'imperial';
 
-  const conv = (v: number | undefined, factor: number): number | undefined =>
-    v !== undefined ? v * factor : undefined;
+  const conv = (v: number | undefined | null, factor: number): number | undefined =>
+    v != null ? v * factor : undefined;
 
   const altFactor = imp ? M_TO_FT : 1;
   const velFactor = imp ? MS_TO_FTS : 1;

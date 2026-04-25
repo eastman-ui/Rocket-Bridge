@@ -194,11 +194,12 @@ def extract_or_results_from_stored(stored_results: dict) -> dict:
     velocity_off_rail_ms = _find(
         stored_results,
         "velocity_off_rail", "velocityoffrail", "rail_velocity", "off_rail_velocity",
-        "velocity_off_rail_ms",
+        "velocity_off_rail_ms", "launch_rod_velocity", "launchrodvelocity",
     )
     stability_margin_cal = _find(
         stored_results,
         "stability", "stability_margin", "stability_margin_cal", "stability_coefficient",
+        "burnout_stability_margin", "max_stability_margin",
     )
 
     return {

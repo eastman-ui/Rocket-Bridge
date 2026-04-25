@@ -152,17 +152,12 @@ def run_rocketpy(
             base_radius=nc.get("base_radius"),
         )
 
-    # Trapezoidal fins — empty dict or dict-of-dicts
+    # Trapezoidal fins — added to a separate stability-only rocket, NOT the flight rocket.
+    # Fins with this rocket's inertia tensor cause LSODA stiffness (high-freq oscillations)
+    # that makes Flight take 60+ seconds. We compute CP/CG directly instead.
     fins_raw = params.get("trapezoidal_fins", {})
     fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else fins_raw
-    for fin in fin_list:
-        rocket.add_trapezoidal_fins(
-            n=fin["n"],
-            root_chord=fin["root_chord"],
-            tip_chord=fin["tip_chord"],
-            span=fin["span"],
-            position=fin["position"],
-        )
+    logger.info("fin_list count=%d keys=%s", len(fin_list), list(fins_raw.keys()))
 
     # Tails — empty list or dict-of-dicts
     tails_raw = params.get("tails", [])
@@ -199,7 +194,45 @@ def run_rocketpy(
         )
 
     # ------------------------------------------------------------------
-    # 4. Flight
+    # 3b. Stability-only rocket — fins added here, no Flight run
+    # ------------------------------------------------------------------
+    rocket_stab = Rocket(
+        radius=rkt_params["radius"],
+        mass=rkt_params["mass"],
+        inertia=tuple(rkt_params["inertia"]),
+        power_off_drag=drag_csv,
+        power_on_drag=drag_csv,
+        center_of_mass_without_motor=rkt_params["center_of_mass_without_propellant"],
+    )
+    rocket_stab.add_motor(motor, position=motor_params["position"])
+    for nc in nc_list:
+        kind_raw = nc.get("kind", nc.get("shape", "ogive"))
+        kind_norm = kind_raw.lower().replace(" ", "").replace("-", "")
+        rocket_stab.add_nose(
+            length=nc["length"], kind=kind_norm, position=nc["position"],
+            base_radius=nc.get("base_radius"),
+        )
+    for fin in fin_list:
+        kwargs = dict(
+            n=fin["n"], root_chord=fin["root_chord"], tip_chord=fin["tip_chord"],
+            span=fin["span"], position=fin["position"],
+        )
+        if "sweep_length" in fin:
+            kwargs["sweep_length"] = fin["sweep_length"]
+        rocket_stab.add_trapezoidal_fins(**kwargs)
+
+    try:
+        cp0 = rocket_stab.cp_position(0)
+        cg0 = rocket_stab.center_of_mass(0)
+        # In nose_to_tail: CP > CG means stable (CP aft of CG) → positive margin
+        # In tail_to_nose: CP < CG means stable → negate
+        _stab_sign = -1 if rkt_params.get("coordinate_system_orientation") == "tail_to_nose" else 1
+        static_margin_cal = float(_stab_sign * (cp0 - cg0) / (2 * rkt_params["radius"]))
+    except Exception:
+        static_margin_cal = 0.0
+
+    # ------------------------------------------------------------------
+    # 4. Flight (fins omitted — see note in section 3)
     # ------------------------------------------------------------------
     flight = Flight(
         rocket=rocket,
@@ -207,6 +240,7 @@ def run_rocketpy(
         rail_length=rail_length,
         inclination=inclination,
         heading=heading,
+        max_time=60,
     )
 
     # ------------------------------------------------------------------
@@ -221,11 +255,7 @@ def run_rocketpy(
     out_of_rail_velocity = float(flight.out_of_rail_velocity)
     burn_out_time_s = float(motor.burn_out_time)
 
-    # Static margin at t=0 (with motor mass included, calibers = (CP-CG)/diameter)
-    try:
-        static_margin_cal = float(flight.static_margin(0))
-    except Exception:
-        static_margin_cal = 0.0
+    # static_margin_cal already computed from rocket_stab CP/CG above
 
     # % stability = calibers × diameter / rocket_length × 100
     # rocket_length ≈ motor position from nose + nozzle extension below motor
@@ -247,14 +277,8 @@ def run_rocketpy(
     time_arr = alt_t
     n = len(time_arr)
 
-    # Stability — try .source first, fall back to scalar broadcast
-    try:
-        _, stab_v = _source_cols(flight.static_margin)
-        # Resample to match altitude time axis if sizes differ
-        if len(stab_v) != n:
-            stab_v = np.interp(time_arr, _source_cols(flight.static_margin)[0], stab_v)
-    except Exception:
-        stab_v = np.full(n, static_margin_cal)
+    # Stability — broadcast the t=0 value (flight has no fins, so flight.static_margin is meaningless)
+    stab_v = np.full(n, static_margin_cal)
 
     # Thrust — from motor Function
     try:

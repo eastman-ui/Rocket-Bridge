@@ -69,15 +69,22 @@ def run_rocketpy(
     if use_live_weather:
         try:
             now = datetime.now(tz=timezone.utc)
-            env.set_date((now.year, now.month, now.day, now.hour))
+            # Round to nearest GFS run hour (00/06/12/18 UTC)
+            gfs_hour = (now.hour // 6) * 6
+            env.set_date((now.year, now.month, now.day, gfs_hour))
             env.set_atmospheric_model(type="Forecast", file="GFS")
+            # Sanity check: surface density at launch elevation should be 0.5–1.5 kg/m³
+            surface_density = env.density(elevation)
+            if not (0.3 <= surface_density <= 1.6):
+                raise ValueError(
+                    f"GFS returned implausible density {surface_density:.3f} kg/m³ at {elevation}m; "
+                    "falling back to standard atmosphere."
+                )
             weather_source = "GFS"
-            logger.info("Using GFS live weather forecast.")
+            logger.info("GFS active. Surface density=%.3f kg/m³ at %dm", surface_density, elevation)
         except Exception as exc:
-            warnings.warn(
-                f"GFS weather fetch failed ({exc}); falling back to standard_atmosphere.",
-                RuntimeWarning,
-            )
+            logger.warning("GFS failed (%s); using standard_atmosphere.", exc)
+            env = Environment(latitude=lat, longitude=lon, elevation=elevation)
             env.set_atmospheric_model(type="standard_atmosphere")
     else:
         env.set_atmospheric_model(type="standard_atmosphere")
@@ -86,7 +93,6 @@ def run_rocketpy(
     # 2. SolidMotor
     # ------------------------------------------------------------------
     motor_params = params["motors"]
-    logger.info("motor_params type=%s value=%s", type(motor_params), motor_params)
 
     thrust_csv = _resolve(motor_params["thrust_source"], output_dir)
 
@@ -215,11 +221,20 @@ def run_rocketpy(
     out_of_rail_velocity = float(flight.out_of_rail_velocity)
     burn_out_time_s = float(motor.burn_out_time)
 
-    # Static margin at t=0
+    # Static margin at t=0 (with motor mass included, calibers = (CP-CG)/diameter)
     try:
         static_margin_cal = float(flight.static_margin(0))
     except Exception:
         static_margin_cal = 0.0
+
+    # % stability = calibers × diameter / rocket_length × 100
+    # rocket_length ≈ motor position from nose + nozzle extension below motor
+    reference_diameter = 2.0 * rkt_params["radius"]
+    rocket_length = motor_params["position"] + abs(motor_params.get("nozzle_position", 0))
+    if rocket_length > 0 and reference_diameter > 0:
+        static_margin_pct = static_margin_cal * reference_diameter / rocket_length * 100.0
+    else:
+        static_margin_pct = 0.0
 
     # ------------------------------------------------------------------
     # 6. Timeseries (downsampled to ≤500 pts)
@@ -324,6 +339,7 @@ def run_rocketpy(
         "max_acceleration_ms2": max_acceleration_ms2,
         "out_of_rail_velocity": out_of_rail_velocity,
         "static_margin_cal": static_margin_cal,
+        "static_margin_pct": static_margin_pct,
         "burn_out_time_s": burn_out_time_s,
         "timeseries": timeseries,
         "trajectory_3d": trajectory_3d,

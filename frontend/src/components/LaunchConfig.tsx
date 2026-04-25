@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 export interface LaunchConfig {
   lat: number;
   lon: number;
@@ -58,9 +60,56 @@ export default function LaunchConfigForm({
   onChange,
   disabled,
 }: LaunchConfigProps) {
+  const [locating, setLocating] = useState(false);
+  const [locError, setLocError] = useState<string | null>(null);
+
+  const handleUseMyLocation = () => {
+    if (!navigator.geolocation) {
+      setLocError('Geolocation not supported by this browser.');
+      return;
+    }
+    setLocating(true);
+    setLocError(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = parseFloat(pos.coords.latitude.toFixed(5));
+        const lon = parseFloat(pos.coords.longitude.toFixed(5));
+        try {
+          const res = await fetch(
+            `https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lon}`,
+          );
+          const json = await res.json();
+          const elev = json?.results?.[0]?.elevation ?? config.elevation;
+          onChange({ ...config, lat, lon, elevation: elev });
+        } catch {
+          onChange({ ...config, lat, lon });
+        }
+        setLocating(false);
+      },
+      (err) => {
+        setLocError(err.message);
+        setLocating(false);
+      },
+      { timeout: 10000 },
+    );
+  };
+
   return (
     <div className="bg-gray-900 rounded-xl p-5 space-y-4">
-      <h2 className="text-lg font-semibold text-white">Launch Configuration</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-white">Launch Configuration</h2>
+        <button
+          type="button"
+          onClick={handleUseMyLocation}
+          disabled={disabled || locating}
+          className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {locating ? '⏳ Locating…' : '📍 Use my location'}
+        </button>
+      </div>
+      {locError && (
+        <p className="text-xs text-red-400">{locError}</p>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <Field

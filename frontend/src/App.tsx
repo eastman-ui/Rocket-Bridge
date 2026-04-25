@@ -6,6 +6,7 @@ import { ComparisonTable } from './components/ComparisonTable';
 import { TimeSeriesCharts } from './components/TimeSeriesCharts';
 import { TrajectoryPlot } from './components/TrajectoryPlot';
 import type { LaunchConfig } from './components/LaunchConfig';
+import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
 import type { ComparisonResponse } from './types';
 
 // ── Inline small components ──────────────────────────────────────────────────
@@ -52,6 +53,8 @@ export default function App() {
   const [config, setConfig] = useState<LaunchConfig>(defaultConfig);
   const [results, setResults] = useState<ComparisonResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [unitSystem, setUnitSystem] = useState<UnitSystem>('metric');
+  const [stabilityUnit, setStabilityUnit] = useState<StabilityUnit>('cal');
 
   const handleSimulate = async () => {
     if (!selectedFile) return;
@@ -121,10 +124,52 @@ export default function App() {
         {appState === 'error' && <ErrorBox message={errorMessage} />}
         {appState === 'results' && results && (
           <div className="space-y-6">
-            <ComparisonTable orResults={results.or_results} rocketPyResults={results.rocketpy_results} />
+            <div className="flex flex-wrap gap-3">
+              <div className="flex items-center gap-2 bg-gray-900 rounded-xl px-4 py-2">
+                <span className="text-sm text-gray-400">Units:</span>
+                {(['metric', 'imperial'] as UnitSystem[]).map((u) => (
+                  <button
+                    key={u}
+                    onClick={() => setUnitSystem(u)}
+                    className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
+                      unitSystem === u
+                        ? 'bg-blue-600 text-white'
+                        : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {u === 'metric' ? 'Metric' : 'Imperial'}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 bg-gray-900 rounded-xl px-4 py-2">
+                <span className="text-sm text-gray-400">Stability:</span>
+                {(['cal', 'pct'] as StabilityUnit[]).map((u) => (
+                  <button
+                    key={u}
+                    onClick={() => setStabilityUnit(u)}
+                    className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
+                      stabilityUnit === u
+                        ? 'bg-blue-600 text-white'
+                        : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {u === 'cal' ? 'Calibers' : 'Percent'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ComparisonTable
+              orResults={results.or_results}
+              rocketPyResults={results.rocketpy_results}
+              unitSystem={unitSystem}
+              stabilityUnit={stabilityUnit}
+            />
             <TimeSeriesCharts
               orTimeseries={results.or_results.timeseries}
               rocketPyTimeseries={results.rocketpy_results.timeseries}
+              burnOutTimeS={results.rocketpy_results.burn_out_time_s}
+              unitSystem={unitSystem}
+              stabilityUnit={stabilityUnit}
             />
             <TrajectoryPlot
               trajectory={results.rocketpy_results.trajectory_3d}

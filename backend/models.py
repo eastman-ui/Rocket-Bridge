@@ -34,6 +34,7 @@ class RocketPyResults(BaseModel):
     max_acceleration_ms2: float
     out_of_rail_velocity: float
     static_margin_cal: float
+    static_margin_pct: float
     burn_out_time_s: float
     timeseries: TimeSeriesData
     trajectory_3d: Trajectory3D

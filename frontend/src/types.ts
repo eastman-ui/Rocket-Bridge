@@ -34,6 +34,7 @@ export interface RocketPyResults {
   max_acceleration_ms2: number;
   out_of_rail_velocity: number;
   static_margin_cal: number;
+  static_margin_pct: number;
   burn_out_time_s: number;
   timeseries: TimeSeriesData;
   trajectory_3d: Trajectory3D;

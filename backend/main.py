@@ -113,6 +113,7 @@ async def simulate(
             max_acceleration_ms2=rocketpy_raw["max_acceleration_ms2"],
             out_of_rail_velocity=rocketpy_raw["out_of_rail_velocity"],
             static_margin_cal=rocketpy_raw["static_margin_cal"],
+            static_margin_pct=rocketpy_raw["static_margin_pct"],
             burn_out_time_s=rocketpy_raw["burn_out_time_s"],
             timeseries=TimeSeriesData(**rocketpy_raw["timeseries"]),
             trajectory_3d=Trajectory3D(**rocketpy_raw["trajectory_3d"]),

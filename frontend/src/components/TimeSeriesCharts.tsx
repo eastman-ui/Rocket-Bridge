@@ -2,21 +2,61 @@ import PlotlyImport from 'react-plotly.js';
 const Plot = (PlotlyImport as any).default ?? PlotlyImport;
 import type { TimeSeriesData } from '../types';
 
+export type UnitSystem = 'metric' | 'imperial';
+export type StabilityUnit = 'cal' | 'pct';
+
 interface TimeSeriesChartsProps {
   orTimeseries: TimeSeriesData | undefined;
   rocketPyTimeseries: TimeSeriesData;
+  burnOutTimeS: number;
+  unitSystem: UnitSystem;
+  stabilityUnit: StabilityUnit;
 }
 
-export function TimeSeriesCharts({ orTimeseries, rocketPyTimeseries }: TimeSeriesChartsProps) {
+const M_TO_FT = 3.28084;
+const MS_TO_FTS = 3.28084;
+const N_TO_LBF = 0.224809;
+
+function convertAlt(v: number[], sys: UnitSystem) {
+  return sys === 'imperial' ? v.map(x => x * M_TO_FT) : v;
+}
+function convertVel(v: number[], sys: UnitSystem) {
+  return sys === 'imperial' ? v.map(x => x * MS_TO_FTS) : v;
+}
+function convertThrust(v: number[], sys: UnitSystem) {
+  return sys === 'imperial' ? v.map(x => x * N_TO_LBF) : v;
+}
+function convertStab(v: number[], unit: StabilityUnit, calToPct: number) {
+  return unit === 'pct' ? v.map(x => x * calToPct) : v;
+}
+
+export function TimeSeriesCharts({
+  orTimeseries,
+  rocketPyTimeseries,
+  burnOutTimeS,
+  unitSystem,
+  stabilityUnit,
+}: TimeSeriesChartsProps) {
+  const altUnit = unitSystem === 'imperial' ? 'ft AGL' : 'm AGL';
+  const velUnit = unitSystem === 'imperial' ? 'ft/s' : 'm/s';
+  const thrustUnit = unitSystem === 'imperial' ? 'lbf' : 'N';
+
+  const stabUnit = stabilityUnit === 'pct' ? '%' : 'cal';
+  // 1 cal reference line = 1.0 cal; "safe" band 1.5–2.5 cal or ~6–10%
+  // Derive scale factor from rocketpy data (approximate — for reference lines only)
+  // Reference lines in calibers: min 1.5 cal, ideal 2.5 cal
+  const stabMin = stabilityUnit === 'pct' ? 6 : 1.5;
+  const stabMax = stabilityUnit === 'pct' ? 10 : 2.5;
+
   const layout = (title: string, yLabel: string, shapes?: object[]) => ({
     title: { text: title, font: { color: '#e2e8f0', size: 14 } },
     paper_bgcolor: '#111827',
     plot_bgcolor: '#1f2937',
     font: { color: '#9ca3af' },
-    xaxis: { title: 'Time (s)', gridcolor: '#374151', zerolinecolor: '#4b5563' },
-    yaxis: { title: yLabel, gridcolor: '#374151', zerolinecolor: '#4b5563' },
+    xaxis: { title: { text: 'Time (s)', font: { color: '#9ca3af' } }, gridcolor: '#374151', zerolinecolor: '#4b5563' },
+    yaxis: { title: { text: yLabel, font: { color: '#9ca3af' } }, gridcolor: '#374151', zerolinecolor: '#4b5563' },
     legend: { font: { color: '#e2e8f0' }, bgcolor: 'rgba(0,0,0,0)' },
-    margin: { t: 45, r: 15, b: 45, l: 60 },
+    margin: { t: 45, r: 15, b: 45, l: 70 },
     autosize: true,
     shapes: shapes ?? [],
   });
@@ -35,50 +75,45 @@ export function TimeSeriesCharts({ orTimeseries, rocketPyTimeseries }: TimeSerie
   const rpyTrace = (y: number[], name = 'RocketPy') => ({
     x: rocketPyTimeseries.time,
     y,
+    name,
     type: 'scatter',
     mode: 'lines',
-    name,
     line: { color: '#f87171', width: 2 },
   });
 
-  const machRefLine = {
-    type: 'line',
-    x0: 0,
-    x1: 1,
-    xref: 'paper',
-    y0: 1,
-    y1: 1,
-    line: { color: '#94a3b8', dash: 'dash', width: 1 },
-  };
+  const refLine = (y0: number, color: string) => ({
+    type: 'line', x0: 0, x1: 1, xref: 'paper', y0, y1: y0,
+    line: { color, dash: 'dash', width: 1 },
+  });
 
-  const stabilityLine1 = {
-    type: 'line',
-    x0: 0,
-    x1: 1,
-    xref: 'paper',
-    y0: 1.5,
-    y1: 1.5,
-    line: { color: '#fbbf24', dash: 'dash', width: 1 },
-  };
+  // Stability: estimate cal→pct factor from rocketpy timeseries max
+  // (approximation for reference lines; actual pct comes from backend scalar)
+  const orStabConverted = orTimeseries
+    ? convertStab(orTimeseries.stability, stabilityUnit, stabilityUnit === 'pct' ? (stabMax / 2.5) : 1)
+    : undefined;
+  const rpyStabConverted = convertStab(
+    rocketPyTimeseries.stability, stabilityUnit,
+    stabilityUnit === 'pct' ? (stabMax / 2.5) : 1,
+  );
 
-  const stabilityLine2 = {
-    type: 'line',
-    x0: 0,
-    x1: 1,
-    xref: 'paper',
-    y0: 2.5,
-    y1: 2.5,
-    line: { color: '#34d399', dash: 'dash', width: 1 },
-  };
+  // Thrust: truncate to burnout + 2s
+  const thrustCutoff = burnOutTimeS + 2;
+  const thrustIdxEnd = rocketPyTimeseries.time.findIndex(t => t > thrustCutoff);
+  const thrustTimeSlice = thrustIdxEnd === -1
+    ? rocketPyTimeseries.time
+    : rocketPyTimeseries.time.slice(0, thrustIdxEnd);
+  const thrustValSlice = thrustIdxEnd === -1
+    ? rocketPyTimeseries.thrust
+    : rocketPyTimeseries.thrust.slice(0, thrustIdxEnd);
 
   const altitudeData = [
-    ...(orTimeseries ? [orTrace(orTimeseries.altitude)] : []),
-    rpyTrace(rocketPyTimeseries.altitude),
+    ...(orTimeseries ? [orTrace(convertAlt(orTimeseries.altitude, unitSystem))] : []),
+    rpyTrace(convertAlt(rocketPyTimeseries.altitude, unitSystem)),
   ];
 
   const velocityData = [
-    ...(orTimeseries ? [orTrace(orTimeseries.velocity)] : []),
-    rpyTrace(rocketPyTimeseries.velocity),
+    ...(orTimeseries ? [orTrace(convertVel(orTimeseries.velocity, unitSystem))] : []),
+    rpyTrace(convertVel(rocketPyTimeseries.velocity, unitSystem)),
   ];
 
   const machData = [
@@ -87,76 +122,68 @@ export function TimeSeriesCharts({ orTimeseries, rocketPyTimeseries }: TimeSerie
   ];
 
   const stabilityData = [
-    ...(orTimeseries ? [orTrace(orTimeseries.stability)] : []),
-    rpyTrace(rocketPyTimeseries.stability),
+    ...(orStabConverted ? [orTrace(orStabConverted)] : []),
+    rpyTrace(rpyStabConverted),
   ];
 
-  const thrustData = [
-    {
-      x: rocketPyTimeseries.time,
-      y: rocketPyTimeseries.thrust,
-      type: 'scatter',
-      mode: 'lines',
-      name: 'RocketPy',
-      line: { color: '#fb923c', width: 2 },
-      fill: 'tozeroy',
-      fillcolor: 'rgba(251,146,60,0.15)',
-    },
-  ];
+  const thrustData = [{
+    x: thrustTimeSlice,
+    y: convertThrust(thrustValSlice, unitSystem),
+    type: 'scatter',
+    mode: 'lines',
+    name: 'RocketPy',
+    line: { color: '#fb923c', width: 2 },
+    fill: 'tozeroy',
+    fillcolor: 'rgba(251,146,60,0.15)',
+  }];
 
   return (
     <div className="bg-gray-900 rounded-xl p-6">
       <h2 className="text-xl font-bold mb-4 text-white">Flight Data</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Chart 1: Altitude */}
         <div className="w-full">
           <Plot
             data={altitudeData as any}
-            layout={layout('Altitude', 'Altitude (m AGL)') as any}
+            layout={layout('Altitude', `Altitude (${altUnit})`) as any}
             config={config}
             style={{ width: '100%', height: '300px' }}
             useResizeHandler
           />
         </div>
-
-        {/* Chart 2: Velocity */}
         <div className="w-full">
           <Plot
             data={velocityData as any}
-            layout={layout('Velocity', 'Velocity (m/s)') as any}
+            layout={layout('Velocity', `Velocity (${velUnit})`) as any}
             config={config}
             style={{ width: '100%', height: '300px' }}
             useResizeHandler
           />
         </div>
-
-        {/* Chart 3: Mach */}
         <div className="w-full">
           <Plot
             data={machData as any}
-            layout={layout('Mach Number', 'Mach Number', [machRefLine]) as any}
+            layout={layout('Mach Number', 'Mach Number', [refLine(1, '#94a3b8')]) as any}
             config={config}
             style={{ width: '100%', height: '300px' }}
             useResizeHandler
           />
         </div>
-
-        {/* Chart 4: Stability Margin */}
         <div className="w-full">
           <Plot
             data={stabilityData as any}
-            layout={layout('Stability Margin', 'Stability (cal)', [stabilityLine1, stabilityLine2]) as any}
+            layout={layout(`Stability Margin`, `Stability (${stabUnit})`, [
+              refLine(stabMin, '#fbbf24'),
+              refLine(stabMax, '#34d399'),
+            ]) as any}
             config={config}
             style={{ width: '100%', height: '300px' }}
             useResizeHandler
           />
         </div>
-
-        {/* Chart 5: Thrust — full width */}
         <div className="md:col-span-2 w-full">
           <Plot
             data={thrustData as any}
-            layout={layout('Thrust', 'Thrust (N)') as any}
+            layout={layout(`Thrust (0 – burnout+2s)`, `Thrust (${thrustUnit})`) as any}
             config={config}
             style={{ width: '100%', height: '300px' }}
             useResizeHandler

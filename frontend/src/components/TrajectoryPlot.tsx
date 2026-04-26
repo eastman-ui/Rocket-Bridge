@@ -37,7 +37,6 @@ export function TrajectoryPlot({
   const sx = trajectory.x.map(v => v * scale);
   const sy = trajectory.y.map(v => v * scale);
   const sz = trajectory.z.map(v => v * scale);
-  const hasOri = !!(trajectory.ux && trajectory.ux.length === trajectory.t.length);
 
   const burnoutIdx = nearestIdx(trajectory.t, burnOutTimeS);
   const apogeeIdx  = nearestIdx(trajectory.t, apogeeTimeS);
@@ -48,29 +47,11 @@ export function TrajectoryPlot({
   const step = Math.max(1, Math.floor(N / 200));
   const animIdxs = Array.from({ length: Math.ceil(N / step) }, (_, i) => Math.min(i * step, N - 1));
 
-  const coneSize = apogeeAgl * scale * 0.05;
-
-  // Trace layout:
-  //  0 — static path
-  //  1 — animated position marker
-  //  2 — animated nose cone (only when hasOri)
-  //  3+ — static event markers
-  const updateTraces = hasOri ? [1, 2] : [1];
-
-  const frames: any[] = animIdxs.map((idx, fi) => {
-    const fd: any[] = [{
-      x: [sx[idx]], y: [sy[idx]], z: [sz[idx]],
-    }];
-    if (hasOri) {
-      fd.push({
-        x: [sx[idx]], y: [sy[idx]], z: [sz[idx]],
-        u: [trajectory.ux![idx]],
-        v: [trajectory.uy![idx]],
-        w: [trajectory.uz![idx]],
-      });
-    }
-    return { name: String(fi), data: fd, traces: updateTraces };
-  });
+  const frames: any[] = animIdxs.map((idx, fi) => ({
+    name: String(fi),
+    data: [{ x: [sx[idx]], y: [sy[idx]], z: [sz[idx]] }],
+    traces: [1],
+  }));
 
   const sliderSteps = animIdxs.map((idx, fi) => ({
     method: 'animate',
@@ -98,19 +79,6 @@ export function TrajectoryPlot({
       name: 'Rocket',
       marker: { color: '#facc15', size: 10, symbol: 'circle' },
     },
-    // 2 — animated nose direction cone
-    ...(hasOri ? [{
-      type: 'cone',
-      x: [sx[0]], y: [sy[0]], z: [sz[0]],
-      u: [trajectory.ux![0]],
-      v: [trajectory.uy![0]],
-      w: [trajectory.uz![0]],
-      sizemode: 'absolute',
-      sizeref: coneSize,
-      colorscale: [[0, '#facc15'], [1, '#facc15']],
-      showscale: false,
-      name: 'Nose',
-    }] : []),
     // static event markers
     { type: 'scatter3d', mode: 'markers', x: [sx[0]],            y: [sy[0]],            z: [sz[0]],            name: 'Launch',  marker: { color: '#34d399', size: 8, symbol: 'diamond' } },
     { type: 'scatter3d', mode: 'markers', x: [sx[burnoutIdx]],   y: [sy[burnoutIdx]],   z: [sz[burnoutIdx]],   name: 'Burnout', marker: { color: '#fb923c', size: 8, symbol: 'diamond' } },
@@ -130,9 +98,9 @@ export function TrajectoryPlot({
     },
     paper_bgcolor: '#111827',
     scene: {
-      xaxis: { title: `East (${altUnit})`,     gridcolor: '#374151', backgroundcolor: '#1f2937', color: '#9ca3af' },
-      yaxis: { title: `North (${altUnit})`,    gridcolor: '#374151', backgroundcolor: '#1f2937', color: '#9ca3af' },
-      zaxis: { title: `Altitude (${altUnit})`, gridcolor: '#374151', backgroundcolor: '#1f2937', color: '#9ca3af' },
+      xaxis: { title: { text: `East (${altUnit})`, font: { color: '#d1d5db', size: 12 } }, gridcolor: '#374151', backgroundcolor: '#1f2937', color: '#9ca3af', tickfont: { size: 10 } },
+      yaxis: { title: { text: `North (${altUnit})`, font: { color: '#d1d5db', size: 12 } }, gridcolor: '#374151', backgroundcolor: '#1f2937', color: '#9ca3af', tickfont: { size: 10 } },
+      zaxis: { title: { text: `Altitude (${altUnit})`, font: { color: '#d1d5db', size: 12 } }, gridcolor: '#374151', backgroundcolor: '#1f2937', color: '#9ca3af', tickfont: { size: 10 } },
       bgcolor: '#1f2937',
       camera: { eye: { x: 1.5, y: 1.5, z: 0.8 } },
     },
@@ -202,7 +170,7 @@ export function TrajectoryPlot({
     <div className="bg-gray-900 rounded-xl p-4">
       <h2 className="text-sm font-semibold text-gray-300 mb-0.5 uppercase tracking-wide">3D Flight Trajectory</h2>
       <p className="text-gray-600 text-xs mb-3">
-        East/North from launch · altitude {altUnit} · press ▶ to animate rocket orientation
+        East/North from launch · altitude {altUnit} · press ▶ to animate
       </p>
       <Plot
         data={data}

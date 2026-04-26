@@ -52,6 +52,7 @@ def run_rocketpy(
     heading: float,
     use_live_weather: bool,
     output_dir: str,
+    sim_datetime: str | None = None,
 ) -> dict:
     """Run RocketPy simulation from a parameters.json dict.
 
@@ -68,10 +69,15 @@ def run_rocketpy(
     weather_source = "standard_atmosphere"
     if use_live_weather:
         try:
-            now = datetime.now(tz=timezone.utc)
+            if sim_datetime:
+                # Parse local ISO string, treat as UTC (user intent: pick a GFS run)
+                from datetime import datetime as _dt
+                parsed = _dt.fromisoformat(sim_datetime).replace(tzinfo=timezone.utc)
+            else:
+                parsed = datetime.now(tz=timezone.utc)
             # Round down to nearest 6-hour GFS run (00/06/12/18 UTC)
-            gfs_hour = (now.hour // 6) * 6
-            env.set_date((now.year, now.month, now.day, gfs_hour))
+            gfs_hour = (parsed.hour // 6) * 6
+            env.set_date((parsed.year, parsed.month, parsed.day, gfs_hour))
             env.set_atmospheric_model(type="Forecast", file="GFS")
             # Sanity checks: pressure 50,000–120,000 Pa and temperature 220–320 K
             # (RocketPy NOMADS unit bug returns pressure 100× too high — catches it here)

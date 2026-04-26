@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import logging
+from typing import Optional
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,6 +98,7 @@ async def simulate(
     inclination: float = Query(85.0),
     heading: float = Query(0.0),
     use_live_weather: bool = Query(False),
+    sim_datetime: Optional[str] = Query(None),  # ISO local datetime e.g. "2025-08-01T14:00"
 ):
     # Validate file extension
     if not file.filename or not file.filename.endswith(".ork"):
@@ -135,6 +137,7 @@ async def simulate(
             heading,
             use_live_weather,
             tmp_dir,
+            sim_datetime=sim_datetime,
         )
 
         # Step 4: Build ORResults

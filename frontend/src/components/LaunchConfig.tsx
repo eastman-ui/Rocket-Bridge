@@ -8,6 +8,7 @@ export interface LaunchConfig {
   inclination: number;
   heading: number;
   useLiveWeather: boolean;
+  weatherDateTime: string; // ISO local datetime string, e.g. "2025-08-01T14:00"
 }
 
 interface LaunchConfigProps {
@@ -183,7 +184,7 @@ export default function LaunchConfigForm({
           onChange={(e) => onChange({ ...config, useLiveWeather: e.target.checked })}
           className="mt-0.5 accent-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
         />
-        <div>
+        <div className="flex-1">
           <label
             htmlFor="live-weather"
             className="text-sm text-gray-300 cursor-pointer select-none"
@@ -191,9 +192,17 @@ export default function LaunchConfigForm({
             Use live weather (NOMADS GFS)
           </label>
           {config.useLiveWeather && (
-            <p className="text-xs text-gray-500 mt-0.5">
-              Fetches current GFS forecast from NOMADS. Falls back to std atmosphere on error.
-            </p>
+            <div className="mt-2 space-y-1">
+              <label className="text-xs text-gray-400">Forecast date/time (local)</label>
+              <input
+                type="datetime-local"
+                value={config.weatherDateTime}
+                disabled={disabled}
+                onChange={(e) => onChange({ ...config, weatherDateTime: e.target.value })}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+              />
+              <p className="text-xs text-gray-600">GFS runs every 6 h — fetches nearest 00/06/12/18 UTC run.</p>
+            </div>
           )}
         </div>
       </div>

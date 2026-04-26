@@ -5,6 +5,7 @@ import LaunchConfigForm from './components/LaunchConfig';
 import { ComparisonTable } from './components/ComparisonTable';
 import { TimeSeriesCharts } from './components/TimeSeriesCharts';
 import { TrajectoryPlot } from './components/TrajectoryPlot';
+import { OrientationRender } from './components/OrientationRender';
 import { RocketPanel } from './components/RocketPanel';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
@@ -83,6 +84,12 @@ function EmptyResults() {
   );
 }
 
+function nowLocalISO() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
 const defaultConfig: LaunchConfig = {
   lat: 32.99,
   lon: -106.97,
@@ -91,6 +98,7 @@ const defaultConfig: LaunchConfig = {
   inclination: 85,
   heading: 0,
   useLiveWeather: false,
+  weatherDateTime: nowLocalISO(),
 };
 
 type AppState = 'idle' | 'simulating' | 'results' | 'error';
@@ -120,6 +128,9 @@ export default function App() {
         inclination: config.inclination.toString(),
         heading: config.heading.toString(),
         use_live_weather: config.useLiveWeather.toString(),
+        ...(config.useLiveWeather && config.weatherDateTime
+          ? { sim_datetime: config.weatherDateTime }
+          : {}),
       });
       const response = await axios.post<ComparisonResponse>(
         `/api/simulate?${params}`,
@@ -290,6 +301,11 @@ export default function App() {
               apogeeTimeS={rpy.apogee_time_s}
               burnOutTimeS={rpy.burn_out_time_s}
               unitSystem={unitSystem}
+            />
+            <OrientationRender
+              trajectory={rpy.trajectory_3d}
+              burnOutTimeS={rpy.burn_out_time_s}
+              apogeeTimeS={rpy.apogee_time_s}
             />
           </>
         )}

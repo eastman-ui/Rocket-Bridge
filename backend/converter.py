@@ -72,6 +72,7 @@ def convert_ork(ork_path: str, output_dir: str) -> dict:
     # Fix rocketserializer bugs and extract OR stored data
     _extract_drag_from_ork(ork_path, output_dir, params)
     _fix_motor_dry_mass(ork_path, params)
+    _extract_motor_designation(ork_path, params)
     _extract_or_stored_timeseries(ork_path, params)
 
     return params
@@ -267,6 +268,20 @@ def _inject_freeform_fins(ork_path: str, params: dict) -> None:
 
     except Exception:
         pass  # non-fatal — simulation continues without fin approximation
+
+
+def _extract_motor_designation(ork_path: str, params: dict) -> None:
+    """Extract motor designation (e.g. 'M2500T-P') from .ork XML motor element."""
+    try:
+        content = _read_ork_xml(ork_path)
+        match = re.search(r"<designation>(.*?)</designation>", content, re.IGNORECASE)
+        if match:
+            designation = match.group(1).strip()
+            if designation:
+                params.setdefault("motors", {})["designation"] = designation
+                logger.info("_extract_motor_designation: %s", designation)
+    except Exception as exc:
+        logger.warning("_extract_motor_designation: failed (%s)", exc)
 
 
 def _check_java_17_available() -> None:

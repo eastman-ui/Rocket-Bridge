@@ -62,8 +62,10 @@ def _extract_rocket_params(params: dict) -> dict:
     nozzle_pos = float(motor.get("nozzle_position", 0))
     length_m = motor_pos + abs(nozzle_pos) if motor_pos > 0 else 0.0
 
-    thrust_src = str(motor.get("thrust_source", ""))
-    motor_designation = os.path.splitext(os.path.basename(thrust_src))[0]
+    motor_designation = motor.get("designation", "")
+    if not motor_designation:
+        thrust_src = str(motor.get("thrust_source", ""))
+        motor_designation = os.path.splitext(os.path.basename(thrust_src))[0]
 
     fins_raw = params.get("trapezoidal_fins", {})
     fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else fins_raw

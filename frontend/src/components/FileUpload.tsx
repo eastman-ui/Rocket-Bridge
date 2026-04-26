@@ -1,4 +1,4 @@
-import { useDropzone } from 'react-dropzone';
+import { useState } from 'react';
 
 interface FileUploadProps {
   onFileSelect: (file: File) => void;
@@ -11,51 +11,54 @@ export default function FileUpload({
   selectedFile,
   disabled,
 }: FileUploadProps) {
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    accept: { 'application/octet-stream': ['.ork'] },
-    maxFiles: 1,
-    disabled,
-    onDropAccepted: (files) => {
-      if (files[0]) onFileSelect(files[0]);
-    },
-  });
+  const [isDragging, setIsDragging] = useState(false);
 
-  const sizeKB = selectedFile
-    ? (selectedFile.size / 1024).toFixed(1)
-    : null;
+  const accept = (file: File | undefined) => {
+    if (file?.name.endsWith('.ork')) onFileSelect(file);
+  };
 
   return (
     <div
-      {...getRootProps()}
       className={[
-        'rounded-xl border-2 border-dashed p-8 text-center cursor-pointer transition-colors',
-        isDragActive
+        'relative rounded-xl border-2 border-dashed px-4 py-5 flex flex-col items-center justify-center text-center transition-colors',
+        isDragging
           ? 'border-blue-400 bg-blue-950/30'
           : selectedFile
           ? 'border-green-600 bg-gray-900'
-          : 'border-gray-600 bg-gray-900 hover:border-gray-400',
-        disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : '',
+          : 'border-gray-600 bg-gray-900',
       ].join(' ')}
+      onDragOver={(e) => { e.preventDefault(); if (!disabled) setIsDragging(true); }}
+      onDragLeave={() => setIsDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        if (!disabled) accept(e.dataTransfer.files[0]);
+      }}
     >
-      <input {...getInputProps()} />
+      {/* Invisible file input overlaid on the entire area — user clicks it directly */}
+      <input
+        type="file"
+        accept=".ork"
+        disabled={disabled}
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+        onChange={(e) => {
+          accept(e.target.files?.[0]);
+          e.target.value = '';
+        }}
+      />
 
       {selectedFile ? (
-        <div className="space-y-1">
-          <p className="text-green-400 font-semibold text-lg">
-            ✓ Ready
-          </p>
-          <p className="text-white font-medium">{selectedFile.name}</p>
-          <p className="text-gray-400 text-sm">{sizeKB} KB</p>
+        <div className="space-y-1 pointer-events-none">
+          <p className="text-green-400 font-semibold text-sm">File loaded</p>
+          <p className="text-white text-sm font-medium truncate max-w-[220px]">{selectedFile.name}</p>
+          <p className="text-gray-500 text-xs">{(selectedFile.size / 1024).toFixed(1)} KB</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          <p className="text-2xl">🚀</p>
-          <p className="text-gray-300 font-medium">
-            {isDragActive
-              ? 'Drop it here...'
-              : 'Drop your .ork file here or click to browse'}
+        <div className="space-y-1 pointer-events-none">
+          <p className="text-gray-300 text-sm font-medium">
+            {isDragging ? 'Drop here…' : 'Drop .ork or click'}
           </p>
-          <p className="text-gray-500 text-sm">OpenRocket .ork files only</p>
+          <p className="text-gray-600 text-xs">OpenRocket files only</p>
         </div>
       )}
     </div>

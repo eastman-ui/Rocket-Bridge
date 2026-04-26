@@ -1,12 +1,16 @@
 import PlotlyImport from 'react-plotly.js';
 const Plot = (PlotlyImport as any).default ?? PlotlyImport;
 import type { Trajectory3D } from '../types';
+import type { UnitSystem } from './TimeSeriesCharts';
+
+const M_FT = 3.28084;
 
 interface TrajectoryPlotProps {
   trajectory: Trajectory3D;
   apogeeAgl: number;
   apogeeTimeS: number;
   burnOutTimeS: number;
+  unitSystem: UnitSystem;
 }
 
 function nearestIdx(times: number[], target: number): number {
@@ -27,29 +31,64 @@ export function TrajectoryPlot({
   apogeeAgl,
   apogeeTimeS,
   burnOutTimeS,
+  unitSystem,
 }: TrajectoryPlotProps) {
+  const imp = unitSystem === 'imperial';
+  const scale = imp ? M_FT : 1;
+  const altUnit = imp ? 'ft' : 'm';
+
+  const sx = trajectory.x.map(v => v * scale);
+  const sy = trajectory.y.map(v => v * scale);
+  const sz = trajectory.z.map(v => v * scale);
+
   const burnoutIdx = nearestIdx(trajectory.t, burnOutTimeS);
   const apogeeIdx = nearestIdx(trajectory.t, apogeeTimeS);
   const landingIdx = trajectory.t.length - 1;
+
+  // Orientation cones — ~20 evenly-spaced markers showing nose direction
+  const hasOrientation = trajectory.ux && trajectory.ux.length === trajectory.t.length;
+  const coneStep = hasOrientation ? Math.max(1, Math.floor(trajectory.t.length / 20)) : 1;
+  const coneIdxs = hasOrientation
+    ? Array.from({ length: Math.ceil(trajectory.t.length / coneStep) }, (_, i) => i * coneStep)
+        .filter(i => i < trajectory.t.length)
+    : [];
+  const coneSize = apogeeAgl * scale * 0.04;
 
   const data: any[] = [
     // Flight path
     {
       type: 'scatter3d',
       mode: 'lines',
-      x: trajectory.x,
-      y: trajectory.y,
-      z: trajectory.z,
+      x: sx,
+      y: sy,
+      z: sz,
       name: 'Flight path',
       line: { color: '#f87171', width: 4 },
     },
+    // Nose orientation cones
+    ...(hasOrientation && coneIdxs.length > 0 ? [{
+      type: 'cone',
+      x: coneIdxs.map(i => sx[i]),
+      y: coneIdxs.map(i => sy[i]),
+      z: coneIdxs.map(i => sz[i]),
+      u: coneIdxs.map(i => trajectory.ux![i]),
+      v: coneIdxs.map(i => trajectory.uy![i]),
+      w: coneIdxs.map(i => trajectory.uz![i]),
+      sizemode: 'absolute',
+      sizeref: coneSize,
+      colorscale: [[0, '#60a5fa'], [1, '#fb923c']],
+      showscale: false,
+      name: 'Orientation',
+      hovertemplate: 't=%{customdata:.1f}s<extra>Orientation</extra>',
+      customdata: coneIdxs.map(i => trajectory.t[i]),
+    }] : []),
     // Launch marker
     {
       type: 'scatter3d',
       mode: 'markers',
-      x: [trajectory.x[0]],
-      y: [trajectory.y[0]],
-      z: [trajectory.z[0]],
+      x: [sx[0]],
+      y: [sy[0]],
+      z: [sz[0]],
       name: 'Launch',
       marker: { color: '#34d399', size: 10, symbol: 'diamond' },
     },
@@ -57,9 +96,9 @@ export function TrajectoryPlot({
     {
       type: 'scatter3d',
       mode: 'markers',
-      x: [trajectory.x[burnoutIdx]],
-      y: [trajectory.y[burnoutIdx]],
-      z: [trajectory.z[burnoutIdx]],
+      x: [sx[burnoutIdx]],
+      y: [sy[burnoutIdx]],
+      z: [sz[burnoutIdx]],
       name: 'Burnout',
       marker: { color: '#fb923c', size: 10, symbol: 'diamond' },
     },
@@ -67,9 +106,9 @@ export function TrajectoryPlot({
     {
       type: 'scatter3d',
       mode: 'markers',
-      x: [trajectory.x[apogeeIdx]],
-      y: [trajectory.y[apogeeIdx]],
-      z: [trajectory.z[apogeeIdx]],
+      x: [sx[apogeeIdx]],
+      y: [sy[apogeeIdx]],
+      z: [sz[apogeeIdx]],
       name: 'Apogee',
       marker: { color: '#60a5fa', size: 14, symbol: 'diamond' },
     },
@@ -77,35 +116,39 @@ export function TrajectoryPlot({
     {
       type: 'scatter3d',
       mode: 'markers',
-      x: [trajectory.x[landingIdx]],
-      y: [trajectory.y[landingIdx]],
-      z: [trajectory.z[landingIdx]],
+      x: [sx[landingIdx]],
+      y: [sy[landingIdx]],
+      z: [sz[landingIdx]],
       name: 'Landing',
       marker: { color: '#94a3b8', size: 10, symbol: 'diamond' },
     },
   ];
 
+  const apogeeDisplay = imp
+    ? `${Math.round(apogeeAgl * M_FT).toLocaleString()} ft`
+    : `${Math.round(apogeeAgl).toLocaleString()} m`;
+
   const layout: any = {
     title: {
-      text: `3D Flight Trajectory — Apogee: ${Math.round(apogeeAgl)}m AGL`,
+      text: `3D Flight Trajectory — Apogee: ${apogeeDisplay} AGL`,
       font: { color: '#e2e8f0', size: 16 },
     },
     paper_bgcolor: '#111827',
     scene: {
       xaxis: {
-        title: 'East (m)',
+        title: `East (${altUnit})`,
         gridcolor: '#374151',
         backgroundcolor: '#1f2937',
         color: '#9ca3af',
       },
       yaxis: {
-        title: 'North (m)',
+        title: `North (${altUnit})`,
         gridcolor: '#374151',
         backgroundcolor: '#1f2937',
         color: '#9ca3af',
       },
       zaxis: {
-        title: 'Altitude (m)',
+        title: `Altitude (${altUnit})`,
         gridcolor: '#374151',
         backgroundcolor: '#1f2937',
         color: '#9ca3af',
@@ -125,9 +168,9 @@ export function TrajectoryPlot({
   };
 
   return (
-    <div className="bg-gray-900 rounded-xl p-6">
-      <h2 className="text-xl font-bold mb-2 text-white">3D Flight Trajectory</h2>
-      <p className="text-gray-400 text-sm mb-4">
+    <div className="bg-gray-900 rounded-xl p-4">
+      <h2 className="text-sm font-semibold text-gray-300 mb-1 uppercase tracking-wide">3D Flight Trajectory</h2>
+      <p className="text-gray-600 text-xs mb-3">
         Coordinate system: East/North from launch point. Altitude in meters.
       </p>
       <Plot

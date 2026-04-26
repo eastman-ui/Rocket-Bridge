@@ -95,9 +95,9 @@ export default function LaunchConfigForm({
   };
 
   return (
-    <div className="bg-gray-900 rounded-xl p-5 space-y-4">
+    <div className="bg-gray-900 rounded-xl p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-white">Launch Configuration</h2>
+        <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Launch Configuration</h2>
         <button
           type="button"
           onClick={handleUseMyLocation}
@@ -111,7 +111,7 @@ export default function LaunchConfigForm({
         <p className="text-xs text-red-400">{locError}</p>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         <Field
           label="Latitude"
           unit="°"
@@ -188,11 +188,11 @@ export default function LaunchConfigForm({
             htmlFor="live-weather"
             className="text-sm text-gray-300 cursor-pointer select-none"
           >
-            Use live weather (GFS)
+            Use live weather (NOMADS GFS)
           </label>
           {config.useLiveWeather && (
-            <p className="text-xs text-yellow-400 mt-0.5">
-              ⚠ GFS requires internet and adds ~30s
+            <p className="text-xs text-gray-500 mt-0.5">
+              Fetches current GFS forecast from NOMADS. Falls back to std atmosphere on error.
             </p>
           )}
         </div>

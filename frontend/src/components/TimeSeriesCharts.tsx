@@ -58,10 +58,16 @@ export function TimeSeriesCharts({
     legend: { font: { color: '#e2e8f0' }, bgcolor: 'rgba(0,0,0,0)' },
     margin: { t: 45, r: 15, b: 45, l: 70 },
     autosize: true,
+    hovermode: 'x unified',
     shapes: shapes ?? [],
   });
 
-  const config = { responsive: true, displayModeBar: false };
+  const config = {
+    responsive: true,
+    scrollZoom: true,
+    displayModeBar: 'hover' as const,
+    modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toImage'] as any,
+  };
 
   const orTrace = (y: number[]) => ({
     x: orTimeseries!.time,
@@ -138,8 +144,8 @@ export function TimeSeriesCharts({
   }];
 
   return (
-    <div className="bg-gray-900 rounded-xl p-6">
-      <h2 className="text-xl font-bold mb-4 text-white">Flight Data</h2>
+    <div className="bg-gray-900 rounded-xl p-4">
+      <h2 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">Flight Data</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="w-full">
           <Plot

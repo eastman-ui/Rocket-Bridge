@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     ports:
-      - "8000:8000"
+      - "8080:8000"
     volumes:
       - ./backend:/app
     environment:
@@ -17,7 +17,7 @@ services:
     volumes:
       - ./frontend:/app
     ports:
-      - "5173:5173"
+      - "5175:5173"
     environment:
       - API_TARGET=http://backend:8000
     depends_on:

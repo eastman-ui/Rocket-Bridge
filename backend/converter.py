@@ -69,9 +69,10 @@ def convert_ork(ork_path: str, output_dir: str) -> dict:
     if not has_trap and not has_ell:
         _inject_freeform_fins(ork_path, params)
 
-    # Fix rocketserializer bugs using .ork simulation data
+    # Fix rocketserializer bugs and extract OR stored data
     _extract_drag_from_ork(ork_path, output_dir, params)
     _fix_motor_dry_mass(ork_path, params)
+    _extract_or_stored_timeseries(ork_path, params)
 
     return params
 
@@ -290,6 +291,79 @@ def _check_java_17_available() -> None:
         raise RuntimeError(
             "Java 17 is required. Install from https://adoptium.net/"
         )
+
+
+def _extract_or_stored_timeseries(ork_path: str, params: dict) -> None:
+    """Extract OR stored simulation timeseries and at-launch stability from .ork datapoints.
+
+    Adds to params["stored_results"]:
+      - "or_timeseries": downsampled dict of time/altitude/velocity/mach/stability/thrust
+      - "launch_stability_margin": stability at first powered timestep (matches OR display)
+    """
+    try:
+        import math
+        content = _read_ork_xml(ork_path)
+        types_match = re.search(r'types="([^"]+)"', content, re.IGNORECASE)
+        if not types_match:
+            return
+        types = types_match.group(1).split(",")
+
+        col_names = {
+            "Time": None, "Altitude": None, "Total velocity": None,
+            "Mach number": None, "Stability margin calibers": None, "Thrust": None,
+        }
+        for name in col_names:
+            if name in types:
+                col_names[name] = types.index(name)
+
+        if col_names["Time"] is None:
+            return
+
+        datapoints = re.findall(r"<datapoint>(.*?)</datapoint>", content, re.DOTALL | re.IGNORECASE)
+        if not datapoints:
+            return
+
+        arrays: dict[str, list] = {k: [] for k in col_names}
+        for dp in datapoints:
+            vals = dp.strip().split(",")
+            for name, idx in col_names.items():
+                if idx is not None and idx < len(vals):
+                    try:
+                        arrays[name].append(float(vals[idx]))
+                    except (ValueError, IndexError):
+                        arrays[name].append(float("nan"))
+                else:
+                    arrays[name].append(float("nan"))
+
+        stab_list = arrays["Stability margin calibers"]
+        launch_stab = next((s for s in stab_list if not math.isnan(s)), None)
+        if launch_stab is not None:
+            params.setdefault("stored_results", {})["launch_stability_margin"] = launch_stab
+            logger.info("_extract_or_stored_timeseries: launch stability=%.3f cal", launch_stab)
+
+        def clean(arr: list) -> list:
+            return [0.0 if math.isnan(v) else v for v in arr]
+
+        time_arr = clean(arrays["Time"])
+        n = len(time_arr)
+        if n == 0:
+            return
+        step = max(1, n // 500)
+        idx_s = list(range(0, n, step))
+
+        params.setdefault("stored_results", {})["or_timeseries"] = {
+            "time":      [time_arr[i] for i in idx_s],
+            "altitude":  [clean(arrays["Altitude"])[i] for i in idx_s],
+            "velocity":  [clean(arrays["Total velocity"])[i] for i in idx_s],
+            "mach":      [clean(arrays["Mach number"])[i] for i in idx_s],
+            "stability": [clean(stab_list)[i] for i in idx_s],
+            "thrust":    [clean(arrays["Thrust"])[i] for i in idx_s],
+        }
+        logger.info(
+            "_extract_or_stored_timeseries: %d pts (downsampled from %d)", len(idx_s), n
+        )
+    except Exception as exc:
+        logger.warning("_extract_or_stored_timeseries: failed (%s)", exc)
 
 
 def get_stored_results(params: dict) -> dict:

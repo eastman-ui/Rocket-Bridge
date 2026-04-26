@@ -10,7 +10,6 @@ interface ComparisonTableProps {
 
 const M_TO_FT = 3.28084;
 const MS_TO_FTS = 3.28084;
-const MS2_TO_FTS2 = 3.28084;
 
 interface MetricRow {
   name: string;
@@ -27,7 +26,7 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
 
   const altFactor = imp ? M_TO_FT : 1;
   const velFactor = imp ? MS_TO_FTS : 1;
-  const accFactor = imp ? MS2_TO_FTS2 : 1;
+  const accFactor = imp ? M_TO_FT : 1;
 
   const altUnit = imp ? 'ft AGL' : 'm AGL';
   const velUnit = imp ? 'ft/s' : 'm/s';
@@ -98,45 +97,43 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
   };
 
   const fmtDelta = (d: number | null) => {
-    if (d === null) return 'N/A';
+    if (d === null) return '—';
     return `${d >= 0 ? '+' : ''}${d.toFixed(1)}%`;
   };
 
   return (
-    <div className="bg-gray-900 rounded-xl p-6">
-      <h2 className="text-xl font-bold mb-4">Simulation Comparison</h2>
+    <div className="bg-gray-900 rounded-xl p-4">
+      <h2 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">Simulation Comparison</h2>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-gray-800 text-gray-400 text-sm uppercase border-b border-gray-700">
-              <th className="px-4 py-3 text-left font-semibold">Metric</th>
-              <th className="px-4 py-3 text-right font-semibold">OpenRocket</th>
-              <th className="px-4 py-3 text-right font-semibold">RocketPy</th>
-              <th className="px-4 py-3 text-right font-semibold">Delta</th>
+            <tr className="text-gray-500 text-xs uppercase border-b border-gray-700">
+              <th className="pb-2 text-left font-semibold">Metric</th>
+              <th className="pb-2 px-3 text-right font-semibold">OpenRocket</th>
+              <th className="pb-2 px-3 text-right font-semibold">RocketPy</th>
+              <th className="pb-2 text-right font-semibold">Δ</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-700">
-            {metrics.map((m, i) => {
+          <tbody className="divide-y divide-gray-800">
+            {metrics.map((m) => {
               const d = delta(m.orVal, m.rocketPyVal);
               return (
-                <tr key={m.name} className="hover:bg-gray-800 transition-colors">
-                  <td className={`px-4 py-3 text-left font-${i === 0 ? 'semibold' : 'normal'} ${i === 0 ? 'text-base' : 'text-sm'} text-white`}>
-                    {m.name} <span className="text-gray-400 font-normal ml-1">({m.unit})</span>
+                <tr key={m.name} className="hover:bg-gray-800/50 transition-colors">
+                  <td className="py-1.5 text-left text-gray-300">
+                    {m.name}
+                    <span className="text-gray-600 text-xs ml-1">({m.unit})</span>
                   </td>
-                  <td className={`px-4 py-3 text-right font-mono ${m.orVal === undefined ? 'text-gray-500' : 'text-gray-200'}`}>
+                  <td className={`py-1.5 px-3 text-right font-mono text-xs ${m.orVal === undefined ? 'text-gray-600' : 'text-gray-300'}`}>
                     {fmt(m.orVal)}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-gray-200">{fmt(m.rocketPyVal)}</td>
-                  <td className={`px-4 py-3 text-right font-mono font-semibold ${deltaColor(d)}`}>{fmtDelta(d)}</td>
+                  <td className="py-1.5 px-3 text-right font-mono text-xs text-gray-200">{fmt(m.rocketPyVal)}</td>
+                  <td className={`py-1.5 text-right font-mono text-xs font-semibold ${deltaColor(d)}`}>{fmtDelta(d)}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <p className="text-gray-500 text-sm mt-4">
-        OpenRocket typically overpredicts apogee by 10–30% vs RocketPy. Large deltas on apogee are expected.
-      </p>
     </div>
   );
 }

@@ -110,6 +110,11 @@ def run_rocketpy(
             grain_separation=motor_params["grain_separation"],
             grains_center_of_mass_position=motor_params["grains_center_of_mass_position"],
             center_of_dry_mass_position=motor_params["center_of_dry_mass_position"],
+            nozzle_position=motor_params.get("nozzle_position", 0.0),
+            throat_radius=motor_params.get("throat_radius", 0.01),
+            coordinate_system_orientation=motor_params.get(
+                "coordinate_system_orientation", "nozzle_to_combustion_chamber"
+            ),
         )
     except Exception:
         import traceback as _tb
@@ -146,6 +151,9 @@ def run_rocketpy(
         power_off_drag=drag_csv,
         power_on_drag=drag_csv,
         center_of_mass_without_motor=rkt_params["center_of_mass_without_propellant"],
+        coordinate_system_orientation=rkt_params.get(
+            "coordinate_system_orientation", "nose_to_tail"
+        ),
     )
 
     # Motor — position stored in motor_params
@@ -167,13 +175,18 @@ def run_rocketpy(
             base_radius=nc.get("base_radius"),
         )
 
-    # Trapezoidal fins — kept out of flight rocket; added to stability-only rocket below.
-    # Even with corrected inertia, fins cause LSODA stiffness in rocketpy ≤1.12.1
-    # (aerodynamic restoring moment creates high-freq pitch/yaw oscillations the solver
-    # can't step over efficiently).  CP/CG from the stab rocket is used instead.
+    # Trapezoidal fins
     fins_raw = params.get("trapezoidal_fins", {})
     fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else fins_raw
     logger.info("fin_list count=%d keys=%s", len(fin_list), list(fins_raw.keys()))
+    for fin in fin_list:
+        kwargs = dict(
+            n=fin["n"], root_chord=fin["root_chord"], tip_chord=fin["tip_chord"],
+            span=fin["span"], position=fin["position"],
+        )
+        if "sweep_length" in fin:
+            kwargs["sweep_length"] = fin["sweep_length"]
+        rocket.add_trapezoidal_fins(**kwargs)
 
     # Tails — empty list or dict-of-dicts
     tails_raw = params.get("tails", [])
@@ -210,35 +223,7 @@ def run_rocketpy(
         )
 
     # ------------------------------------------------------------------
-    # 3b. Stability-only rocket — fins added here, no Flight run
-    # ------------------------------------------------------------------
-    rocket_stab = Rocket(
-        radius=rkt_params["radius"],
-        mass=rkt_params["mass"],
-        inertia=inertia_corrected,
-        power_off_drag=drag_csv,
-        power_on_drag=drag_csv,
-        center_of_mass_without_motor=rkt_params["center_of_mass_without_propellant"],
-    )
-    rocket_stab.add_motor(motor, position=motor_params["position"])
-    for nc in nc_list:
-        kind_raw = nc.get("kind", nc.get("shape", "ogive"))
-        kind_norm = kind_raw.lower().replace(" ", "").replace("-", "")
-        rocket_stab.add_nose(
-            length=nc["length"], kind=kind_norm, position=nc["position"],
-            base_radius=nc.get("base_radius"),
-        )
-    for fin in fin_list:
-        kwargs = dict(
-            n=fin["n"], root_chord=fin["root_chord"], tip_chord=fin["tip_chord"],
-            span=fin["span"], position=fin["position"],
-        )
-        if "sweep_length" in fin:
-            kwargs["sweep_length"] = fin["sweep_length"]
-        rocket_stab.add_trapezoidal_fins(**kwargs)
-
-    # ------------------------------------------------------------------
-    # 4. Flight (fins omitted — see note in section 3)
+    # 4. Flight
     # ------------------------------------------------------------------
     flight = Flight(
         rocket=rocket,
@@ -246,7 +231,7 @@ def run_rocketpy(
         rail_length=rail_length,
         inclination=inclination,
         heading=heading,
-        max_time=60,
+        max_time=600,
     )
 
     # ------------------------------------------------------------------
@@ -261,11 +246,12 @@ def run_rocketpy(
     out_of_rail_velocity = float(flight.out_of_rail_velocity)
     burn_out_time_s = float(motor.burn_out_time)
 
-    # Static margin from stability-only rocket (has fins, no Flight needed)
+    # Static margin at launch (t=0 full propellant, Mach=0)
     try:
-        cp0 = rocket_stab.cp_position(0)
-        cg0 = rocket_stab.center_of_mass(0)
-        _stab_sign = -1 if rkt_params.get("coordinate_system_orientation") == "tail_to_nose" else 1
+        cp0 = rocket.cp_position(0)
+        cg0 = rocket.center_of_mass(0)
+        cso = rkt_params.get("coordinate_system_orientation", "nose_to_tail")
+        _stab_sign = -1 if cso == "tail_to_nose" else 1
         static_margin_cal = float(_stab_sign * (cp0 - cg0) / (2 * rkt_params["radius"]))
     except Exception:
         static_margin_cal = 0.0
@@ -290,7 +276,6 @@ def run_rocketpy(
     time_arr = alt_t
     n = len(time_arr)
 
-    # Stability — broadcast t=0 value (flight rocket has no fins; flight.static_margin meaningless)
     stab_v = np.full(n, static_margin_cal)
 
     # Thrust — from motor Function

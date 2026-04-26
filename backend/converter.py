@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +69,110 @@ def convert_ork(ork_path: str, output_dir: str) -> dict:
     if not has_trap and not has_ell:
         _inject_freeform_fins(ork_path, params)
 
+    # Fix rocketserializer bugs using .ork simulation data
+    _extract_drag_from_ork(ork_path, output_dir, params)
+    _fix_motor_dry_mass(ork_path, params)
+
     return params
+
+
+def _read_ork_xml(ork_path: str) -> str:
+    """Return XML content of .ork file (handles ZIP, gzip, plain)."""
+    import gzip, zipfile
+    with open(ork_path, "rb") as f:
+        magic = f.read(4)
+    if magic[:2] == b"PK":
+        with zipfile.ZipFile(ork_path) as zf:
+            names = zf.namelist()
+            entry = next((n for n in names if n.endswith(".ork") or n.endswith(".xml")), names[0])
+            return zf.read(entry).decode("utf-8", errors="replace")
+    elif magic[:2] == b"\x1f\x8b":
+        with gzip.open(ork_path, "rt", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    else:
+        with open(ork_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+
+def _extract_drag_from_ork(ork_path: str, output_dir: str, params: dict) -> None:
+    """Fix drag curve: rocketserializer uses 'Axial drag coefficient' (near-zero).
+    Correct label is 'Drag coefficient' (~0.6-0.8 for typical rockets).
+    """
+    try:
+        content = _read_ork_xml(ork_path)
+        types_match = re.search(r'types="([^"]+)"', content, re.IGNORECASE)
+        if not types_match:
+            logger.warning("_extract_drag: no types attribute in simulation data")
+            return
+        types = types_match.group(1).split(",")
+        if "Drag coefficient" not in types or "Mach number" not in types:
+            logger.warning("_extract_drag: 'Drag coefficient' or 'Mach number' not in data labels")
+            return
+        idx_cd = types.index("Drag coefficient")
+        idx_mach = types.index("Mach number")
+        datapoints = re.findall(r"<datapoint>(.*?)</datapoint>", content, re.DOTALL | re.IGNORECASE)
+        if not datapoints:
+            logger.warning("_extract_drag: no datapoints found")
+            return
+        mach_vals, cd_vals = [], []
+        for dp in datapoints:
+            vals = dp.strip().split(",")
+            try:
+                mach = float(vals[idx_mach])
+                cd = float(vals[idx_cd])
+                if mach > 0 and cd > 0:
+                    mach_vals.append(mach)
+                    cd_vals.append(cd)
+            except (ValueError, IndexError):
+                continue
+        if not mach_vals:
+            logger.warning("_extract_drag: no valid Mach/CD data points")
+            return
+        drag_data = np.array([mach_vals, cd_vals]).T
+        drag_data = drag_data[drag_data[:, 0].argsort()]
+        _, first_idx = np.unique(drag_data[:, 0], return_index=True)
+        drag_data = drag_data[first_idx]
+        drag_path = os.path.join(output_dir, "drag_curve_fixed.csv")
+        np.savetxt(drag_path, drag_data, delimiter=",", fmt="%.6f")
+        params["rocket"]["drag_curve"] = drag_path
+        logger.info(
+            "_extract_drag: %d pts, Mach=[%.3f,%.3f], CD=[%.3f,%.3f]",
+            len(drag_data), drag_data[:, 0].min(), drag_data[:, 0].max(),
+            drag_data[:, 1].min(), drag_data[:, 1].max(),
+        )
+    except Exception as exc:
+        logger.warning("_extract_drag: failed (%s) — keeping rocketserializer drag_curve", exc)
+
+
+def _fix_motor_dry_mass(ork_path: str, params: dict) -> None:
+    """Extract motor dry mass from .ork simulation data.
+    Rocketserializer explicitly zeroes dry_mass; we recover it as min(Motor mass).
+    """
+    try:
+        content = _read_ork_xml(ork_path)
+        types_match = re.search(r'types="([^"]+)"', content, re.IGNORECASE)
+        if not types_match:
+            return
+        types = types_match.group(1).split(",")
+        if "Motor mass" not in types:
+            return
+        idx = types.index("Motor mass")
+        datapoints = re.findall(r"<datapoint>(.*?)</datapoint>", content, re.DOTALL | re.IGNORECASE)
+        masses = []
+        for dp in datapoints:
+            vals = dp.strip().split(",")
+            try:
+                masses.append(float(vals[idx]))
+            except (ValueError, IndexError):
+                continue
+        if not masses:
+            return
+        dry_mass = min(masses)
+        if dry_mass > 0.05:
+            params["motors"]["dry_mass"] = round(dry_mass, 4)
+            logger.info("_fix_motor_dry_mass: dry_mass=%.3f kg", dry_mass)
+    except Exception as exc:
+        logger.warning("_fix_motor_dry_mass: failed (%s)", exc)
 
 
 def _inject_freeform_fins(ork_path: str, params: dict) -> None:

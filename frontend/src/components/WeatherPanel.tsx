@@ -60,7 +60,7 @@ function buildUrl(lat: number, lon: number, imp: boolean): string {
   );
 }
 
-interface WeatherHourly {
+export interface WeatherHourly {
   time: string[];
   temperature_2m: number[];
   windspeed_10m: number[];
@@ -76,7 +76,7 @@ interface WeatherHourly {
   [key: string]: number[] | string[];
 }
 
-interface WeatherData {
+export interface WeatherData {
   elevation: number;
   hourly: WeatherHourly;
   hourly_units: Record<string, string>;
@@ -113,14 +113,17 @@ interface Props {
   elevationM: number;
   launchDateTime: string; // "2025-08-01T14:00"
   unitSystem: UnitSystem;
+  onWeatherData?: (data: WeatherData | null) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem }: Props) {
+export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem, onWeatherData }: Props) {
   const imp = unitSystem === 'imperial';
   const { data, loading, error } = useWeather(lat, lon, imp);
   const [selectedHour, setSelectedHour] = useState<string | null>(null);
   const launchSlotRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => { onWeatherData?.(data); }, [data, onWeatherData]);
 
   // Auto-scroll launch hour into view when data loads or date changes
   useEffect(() => {

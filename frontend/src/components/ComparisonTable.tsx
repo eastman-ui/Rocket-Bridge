@@ -6,6 +6,7 @@ interface ComparisonTableProps {
   rocketPyResults: RocketPyResults;
   unitSystem: UnitSystem;
   stabilityUnit: StabilityUnit;
+  className?: string;
 }
 
 const M_TO_FT = 3.28084;
@@ -18,7 +19,7 @@ interface MetricRow {
   unit: string;
 }
 
-export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabilityUnit }: ComparisonTableProps) {
+export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabilityUnit, className = '' }: ComparisonTableProps) {
   const imp = unitSystem === 'imperial';
 
   const conv = (v: number | undefined | null, factor: number): number | undefined =>
@@ -102,7 +103,7 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
   };
 
   return (
-    <div className="bg-gray-900 rounded-xl p-4">
+    <div className={`bg-gray-900 rounded-xl p-4 ${className}`}>
       <h2 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">Simulation Comparison</h2>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">

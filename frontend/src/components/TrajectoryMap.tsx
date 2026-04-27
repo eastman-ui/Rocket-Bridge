@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { Trajectory3D } from '../types';
+import type { WeatherData } from './WeatherPanel';
 
 interface Props {
   trajectory: Trajectory3D;
@@ -11,7 +12,72 @@ interface Props {
   apogeeTimeS: number;
   burnOutTimeS: number;
   kmlData?: string;
+  weatherData?: WeatherData;
+  weatherIsImperial?: boolean;
+  launchDateTime?: string;
 }
+
+const DRIFT_P_LEVELS = [1000, 925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10] as const;
+
+function pToAltM(hPa: number): number {
+  const T0 = 288.15, L = 0.0065, P0 = 1013.25, g = 9.80665, R = 287.05;
+  return Math.max(0, (T0 / L) * (1 - Math.pow(hPa / P0, (R * L) / g)));
+}
+
+// Compute predicted landing [lat, lon] for a given forecast hour index
+function predictLanding(
+  trajectory: Trajectory3D,
+  apogeeTimeS: number,
+  launchLat: number,
+  launchLon: number,
+  siteElevM: number,
+  hourly: WeatherData['hourly'],
+  hourIdx: number,
+  speedToMs: number,
+): [number, number] {
+  const { t, x, y, z } = trajectory;
+  const apogeeI = nearestIdx(t, apogeeTimeS);
+  let dx = 0, dy = 0;
+
+  for (let i = apogeeI; i < t.length - 1; i++) {
+    const dt = t[i + 1] - t[i];
+    const altAgl = Math.max(0, z[i] - z[0]);
+    const altAsl = altAgl + siteElevM;
+
+    let ws = (hourly.windspeed_10m as number[])[hourIdx] ?? 0;
+    let wd = (hourly.winddirection_10m as number[])[hourIdx] ?? 0;
+    let bestDiff = Infinity;
+
+    for (const p of DRIFT_P_LEVELS) {
+      const gph = (hourly[`geopotential_height_${p}hPa`] as number[])?.[hourIdx];
+      const levelAlt = gph != null ? gph : pToAltM(p);
+      const diff = Math.abs(levelAlt - altAsl);
+      if (diff < bestDiff) {
+        const pWs = (hourly[`windspeed_${p}hPa`] as number[])?.[hourIdx];
+        const pWd = (hourly[`winddirection_${p}hPa`] as number[])?.[hourIdx];
+        if (pWs != null && pWd != null) {
+          bestDiff = diff;
+          ws = pWs;
+          wd = pWd;
+        }
+      }
+    }
+
+    const wsMs = ws * speedToMs;
+    const wdRad = wd * Math.PI / 180;
+    // Meteorological convention: wind FROM wd → u (east) = -ws*sin(wd), v (north) = -ws*cos(wd)
+    dx += -wsMs * Math.sin(wdRad) * dt;
+    dy += -wsMs * Math.cos(wdRad) * dt;
+  }
+
+  return enuToLatLon(x[apogeeI] + dx, y[apogeeI] + dy, launchLat, launchLon);
+}
+
+// 8 visually distinct colors for hourly predictions
+const DRIFT_COLORS = [
+  '#38bdf8', '#818cf8', '#a78bfa', '#f472b6',
+  '#fb923c', '#facc15', '#4ade80', '#34d399',
+];
 
 const R_EARTH = 6378137;
 
@@ -68,9 +134,11 @@ function downloadKml(kmlData: string) {
 export function TrajectoryMap({
   trajectory, launchLat, launchLon, launchElevationM,
   apogeeTimeS, burnOutTimeS, kmlData,
+  weatherData, weatherIsImperial, launchDateTime,
 }: Props) {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
+  const [showDrift, setShowDrift] = useState(true);
 
   useEffect(() => {
     if (!mapRef.current || trajectory.t.length === 0) return;
@@ -175,6 +243,57 @@ export function TrajectoryMap({
       .bindPopup(`<b>Landing</b><br>t = ${t[landingI].toFixed(1)} s<br>Alt: ${altLabel(landingI)}<br>Lat: ${latLons[landingI][0].toFixed(5)}, Lon: ${latLons[landingI][1].toFixed(5)}`)
       .addTo(map);
 
+    // ── Drift predictions ──────────────────────────────────────────────────────
+    if (weatherData && showDrift) {
+      const hourly = weatherData.hourly;
+      const times = hourly.time as string[];
+      const speedToMs = weatherIsImperial ? 0.44704 : (1 / 3.6);
+
+      // Find forecast hours around launch time (or now), every 3h, up to 8
+      const pivot = launchDateTime ?? new Date().toISOString().slice(0, 16);
+      const pivotMs = new Date(pivot).getTime();
+      const driftHours: { idx: number; label: string }[] = [];
+      for (let i = 0; i < times.length && driftHours.length < 8; i++) {
+        const tMs = new Date(times[i]).getTime();
+        if (tMs < pivotMs - 3 * 3600_000) continue;
+        if (tMs > pivotMs + 21 * 3600_000) break;
+        if ((new Date(times[i]).getHours()) % 3 !== 0) continue;
+        driftHours.push({
+          idx: i,
+          label: new Date(times[i]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        });
+      }
+
+      const driftGroup = L.layerGroup().addTo(map);
+      driftHours.forEach(({ idx, label }, ci) => {
+        const [pLat, pLon] = predictLanding(
+          trajectory, apogeeTimeS, launchLat, launchLon,
+          launchElevationM, hourly, idx, speedToMs,
+        );
+        const color = DRIFT_COLORS[ci % DRIFT_COLORS.length];
+        const icon = L.divIcon({
+          html: `<div style="width:10px;height:10px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>`,
+          className: '',
+          iconSize: [10, 10],
+          iconAnchor: [5, 5],
+        });
+        L.marker([pLat, pLon], { icon })
+          .bindPopup(`<b>Predicted Landing</b><br>${label}<br>Lat: ${pLat.toFixed(5)}<br>Lon: ${pLon.toFixed(5)}`)
+          .addTo(driftGroup);
+        // Label above marker
+        L.marker([pLat, pLon], {
+          icon: L.divIcon({
+            html: `<div style="font-size:10px;color:${color};font-weight:600;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000">${label}</div>`,
+            className: '',
+            iconSize: [50, 14],
+            iconAnchor: [25, 20],
+          }),
+          interactive: false,
+          zIndexOffset: -1,
+        }).addTo(driftGroup);
+      });
+    }
+
     // Fit map to trajectory bounds
     const bounds = L.latLngBounds(latLons);
     map.fitBounds(bounds, { padding: [40, 40] });
@@ -183,26 +302,41 @@ export function TrajectoryMap({
       map.remove();
       leafletMap.current = null;
     };
-  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS]);
+  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, weatherIsImperial, launchDateTime]);
 
   return (
     <div className="bg-gray-900 rounded-xl p-4">
       <div className="flex items-center justify-between mb-0.5">
         <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Map Trajectory</h2>
-        {kmlData && (
-          <button
-            onClick={() => downloadKml(kmlData)}
-            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Download KML
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {weatherData && (
+            <button
+              onClick={() => setShowDrift(v => !v)}
+              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                showDrift
+                  ? 'bg-blue-600/20 border-blue-500/40 text-blue-300 hover:bg-blue-600/30'
+                  : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-white'
+              }`}
+            >
+              {showDrift ? 'Hide drift forecast' : 'Show drift forecast'}
+            </button>
+          )}
+          {kmlData && (
+            <button
+              onClick={() => downloadKml(kmlData)}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download KML
+            </button>
+          )}
+        </div>
       </div>
       <p className="text-gray-600 text-xs mb-3">
         Satellite overlay · altitude color gradient (blue → red) · click markers for details
+        {weatherData && showDrift && ' · colored dots = predicted landing per forecast hour'}
       </p>
       <div ref={mapRef} className="rounded-lg overflow-hidden" style={{ height: 480 }} />
       {/* Altitude legend */}

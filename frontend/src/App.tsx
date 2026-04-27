@@ -10,6 +10,7 @@ import { OrientationRender } from './components/OrientationRender';
 import { RocketPanel } from './components/RocketPanel';
 import { HowToModal } from './components/HowToModal';
 import { WeatherPanel } from './components/WeatherPanel';
+import type { WeatherData } from './components/WeatherPanel';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
 import type { ComparisonResponse } from './types';
@@ -116,6 +117,7 @@ export default function App() {
   const [stabilityUnit, setStabilityUnit] = useState<StabilityUnit>('cal');
   const [panelOpen, setPanelOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
 
   const handleSimulate = async () => {
     if (!selectedFile) return;
@@ -205,7 +207,7 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1">
         {/* Two-column: input left, results right */}
-        <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 lg:items-stretch">
 
           {/* LEFT — input */}
           <div className="space-y-3">
@@ -232,7 +234,7 @@ export default function App() {
           </div>
 
           {/* RIGHT — results summary */}
-          <div className="space-y-3">
+          <div className="flex flex-col gap-3">
             {appState === 'results' && results && rpy && or_ ? (
               <>
                 {/* Controls */}
@@ -293,6 +295,7 @@ export default function App() {
                   rocketPyResults={rpy}
                   unitSystem={unitSystem}
                   stabilityUnit={stabilityUnit}
+                  className="flex-1"
                 />
               </>
             ) : (
@@ -308,6 +311,7 @@ export default function App() {
           elevationM={config.elevation}
           launchDateTime={config.weatherDateTime}
           unitSystem={unitSystem}
+          onWeatherData={setWeatherData}
         />
 
         {/* Full-width: charts + 3D (only when results) */}
@@ -342,6 +346,9 @@ export default function App() {
               apogeeTimeS={rpy.apogee_time_s}
               burnOutTimeS={rpy.burn_out_time_s}
               kmlData={results.kml_data}
+              weatherData={weatherData ?? undefined}
+              weatherIsImperial={imp}
+              launchDateTime={config.weatherDateTime}
             />
           </>
         )}

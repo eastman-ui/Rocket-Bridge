@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import logging
+from typing import Optional
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from converter import convert_ork, get_stored_results
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
-from models import ComparisonResponse, ORResults, RocketPyResults, TimeSeriesData, Trajectory3D
+from models import ComparisonResponse, ORResults, RocketParams, RocketPyResults, TimeSeriesData, Trajectory3D
 
 # Path to OpenRocket JAR — user sets this via env var or config
 OR_JAR_PATH = os.getenv("OR_JAR_PATH", "./OpenRocket-23.09.jar")
@@ -39,6 +40,54 @@ def health():
     return {"status": "ok"}
 
 
+def _extract_rocket_params(params: dict) -> dict:
+    import math
+    rkt = params.get("rocket", {})
+    motor = params.get("motors", {})
+
+    radius = float(rkt.get("radius", 0))
+    rocket_dry = float(rkt.get("mass", 0))
+    motor_dry = float(motor.get("dry_mass", 0))
+
+    try:
+        grain_count = int(motor.get("grain_number", 0))
+        grain_density = float(motor.get("grain_density", 0))
+        ro = float(motor.get("grain_outer_radius", 0))
+        ri = float(motor.get("grain_initial_inner_radius", 0))
+        h = float(motor.get("grain_initial_height", 0))
+        propellant_mass = grain_count * grain_density * math.pi * (ro ** 2 - ri ** 2) * h
+    except Exception:
+        propellant_mass = 0.0
+
+    motor_pos = float(motor.get("position", 0))
+    nozzle_pos = float(motor.get("nozzle_position", 0))
+    length_m = motor_pos + abs(nozzle_pos) if motor_pos > 0 else 0.0
+
+    motor_designation = motor.get("designation", "")
+    if not motor_designation:
+        thrust_src = str(motor.get("thrust_source", ""))
+        motor_designation = os.path.splitext(os.path.basename(thrust_src))[0]
+
+    fins_raw = params.get("trapezoidal_fins", {})
+    fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else fins_raw
+    fin_count = sum(int(f.get("n", 0)) for f in fin_list) if fin_list else 0
+
+    chutes_raw = params.get("parachutes", {})
+    chute_list = list(chutes_raw.values()) if isinstance(chutes_raw, dict) else chutes_raw
+
+    return {
+        "motor_designation": motor_designation,
+        "length_m": round(length_m, 3),
+        "diameter_m": round(2.0 * radius, 4),
+        "wet_mass_kg": round(rocket_dry + motor_dry + propellant_mass, 3),
+        "dry_mass_kg": round(rocket_dry + motor_dry, 3),
+        "propellant_mass_kg": round(propellant_mass, 3),
+        "motor_dry_mass_kg": round(motor_dry, 3),
+        "fin_count": fin_count,
+        "parachute_count": len(chute_list),
+    }
+
+
 @app.post("/simulate", response_model=ComparisonResponse)
 async def simulate(
     file: UploadFile = File(...),
@@ -49,6 +98,7 @@ async def simulate(
     inclination: float = Query(85.0),
     heading: float = Query(0.0),
     use_live_weather: bool = Query(False),
+    sim_datetime: Optional[str] = Query(None),  # ISO local datetime e.g. "2025-08-01T14:00"
 ):
     # Validate file extension
     if not file.filename or not file.filename.endswith(".ork"):
@@ -64,6 +114,7 @@ async def simulate(
 
         # Step 1: Convert ORK to RocketPy params
         params = convert_ork(ork_path, tmp_dir)
+        rocket_params = RocketParams(**_extract_rocket_params(params))
 
         # Step 2: Extract OpenRocket simulation results, with fallback
         try:
@@ -86,6 +137,7 @@ async def simulate(
             heading,
             use_live_weather,
             tmp_dir,
+            sim_datetime=sim_datetime,
         )
 
         # Step 4: Build ORResults
@@ -113,18 +165,33 @@ async def simulate(
             max_acceleration_ms2=rocketpy_raw["max_acceleration_ms2"],
             out_of_rail_velocity=rocketpy_raw["out_of_rail_velocity"],
             static_margin_cal=rocketpy_raw["static_margin_cal"],
+            static_margin_pct=rocketpy_raw["static_margin_pct"],
             burn_out_time_s=rocketpy_raw["burn_out_time_s"],
+            weather_source=rocketpy_raw["weather_source"],
             timeseries=TimeSeriesData(**rocketpy_raw["timeseries"]),
             trajectory_3d=Trajectory3D(**rocketpy_raw["trajectory_3d"]),
+            launch_lat=rocketpy_raw["launch_lat"],
+            launch_lon=rocketpy_raw["launch_lon"],
+            launch_elevation_m=rocketpy_raw["launch_elevation_m"],
         )
 
-        # Step 6: Check for KML output
-        kml_available = os.path.exists(os.path.join(tmp_dir, "trajectory.kml"))
+        # Step 6: Read KML output before temp dir is deleted
+        kml_path = os.path.join(tmp_dir, "trajectory.kml")
+        kml_data: Optional[str] = None
+        if os.path.exists(kml_path):
+            try:
+                with open(kml_path) as f:
+                    kml_data = f.read()
+            except Exception as e:
+                logger.warning("Could not read KML: %s", e)
 
         return ComparisonResponse(
             or_results=or_results,
             rocketpy_results=rocketpy_results,
-            kml_available=kml_available,
+            kml_available=kml_data is not None,
+            kml_data=kml_data,
+            rocket_params=rocket_params,
+            rocket_diagram=rocketpy_raw.get("rocket_diagram"),
         )
 
     except HTTPException:

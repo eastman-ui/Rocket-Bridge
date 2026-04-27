@@ -52,6 +52,7 @@ def run_rocketpy(
     heading: float,
     use_live_weather: bool,
     output_dir: str,
+    sim_datetime: str | None = None,
 ) -> dict:
     """Run RocketPy simulation from a parameters.json dict.
 
@@ -68,16 +69,36 @@ def run_rocketpy(
     weather_source = "standard_atmosphere"
     if use_live_weather:
         try:
-            now = datetime.now(tz=timezone.utc)
-            env.set_date((now.year, now.month, now.day, now.hour))
+            if sim_datetime:
+                # Parse local ISO string, treat as UTC (user intent: pick a GFS run)
+                from datetime import datetime as _dt
+                parsed = _dt.fromisoformat(sim_datetime).replace(tzinfo=timezone.utc)
+            else:
+                parsed = datetime.now(tz=timezone.utc)
+            # Round down to nearest 6-hour GFS run (00/06/12/18 UTC)
+            gfs_hour = (parsed.hour // 6) * 6
+            env.set_date((parsed.year, parsed.month, parsed.day, gfs_hour))
             env.set_atmospheric_model(type="Forecast", file="GFS")
-            weather_source = "GFS"
-            logger.info("Using GFS live weather forecast.")
+            # Sanity checks: pressure 50,000–120,000 Pa and temperature 220–320 K
+            # (RocketPy NOMADS unit bug returns pressure 100× too high — catches it here)
+            surface_pressure = env.pressure(elevation)
+            surface_temp = env.temperature(elevation)
+            if not (50_000 <= surface_pressure <= 120_000):
+                raise ValueError(
+                    f"NOMADS GFS returned implausible pressure {surface_pressure:.0f} Pa at {elevation}m "
+                    "(expected 50,000–120,000 Pa); falling back to standard atmosphere."
+                )
+            if not (220 <= surface_temp <= 320):
+                raise ValueError(
+                    f"NOMADS GFS returned implausible temperature {surface_temp:.1f} K at {elevation}m; "
+                    "falling back to standard atmosphere."
+                )
+            weather_source = "NOMADS GFS"
+            logger.info("NOMADS GFS active. P=%.0f Pa, T=%.1f K, wind=%.2f m/s at %dm",
+                        surface_pressure, surface_temp, env.wind_speed(elevation), elevation)
         except Exception as exc:
-            warnings.warn(
-                f"GFS weather fetch failed ({exc}); falling back to standard_atmosphere.",
-                RuntimeWarning,
-            )
+            logger.warning("NOMADS GFS failed (%s); using standard_atmosphere.", exc)
+            env = Environment(latitude=lat, longitude=lon, elevation=elevation)
             env.set_atmospheric_model(type="standard_atmosphere")
     else:
         env.set_atmospheric_model(type="standard_atmosphere")
@@ -86,7 +107,6 @@ def run_rocketpy(
     # 2. SolidMotor
     # ------------------------------------------------------------------
     motor_params = params["motors"]
-    logger.info("motor_params type=%s value=%s", type(motor_params), motor_params)
 
     thrust_csv = _resolve(motor_params["thrust_source"], output_dir)
 
@@ -104,6 +124,11 @@ def run_rocketpy(
             grain_separation=motor_params["grain_separation"],
             grains_center_of_mass_position=motor_params["grains_center_of_mass_position"],
             center_of_dry_mass_position=motor_params["center_of_dry_mass_position"],
+            nozzle_position=motor_params.get("nozzle_position", 0.0),
+            throat_radius=motor_params.get("throat_radius", 0.01),
+            coordinate_system_orientation=motor_params.get(
+                "coordinate_system_orientation", "nozzle_to_combustion_chamber"
+            ),
         )
     except Exception:
         import traceback as _tb
@@ -118,13 +143,31 @@ def run_rocketpy(
 
     drag_csv = _resolve(rkt_params["drag_curve"], output_dir)
 
+    # rocketserializer bug: exports inertia as (I_roll, I_roll, I_transverse) but
+    # RocketPy expects (I_transverse, I_transverse, I_roll).  OpenRocket labels the
+    # columns "Longitudinal MOI" (large, pitch/yaw axis) and "Rotational MOI" (small,
+    # spin axis); rocketserializer assigns them to the wrong tuple positions.
+    # Detect by checking whether the first element is smaller than the third — if so,
+    # the tuple is backwards and we swap it.
+    _raw_inertia = tuple(rkt_params["inertia"])
+    if _raw_inertia[0] < _raw_inertia[2]:
+        inertia_corrected = (_raw_inertia[2], _raw_inertia[2], _raw_inertia[0])
+        logger.info(
+            "Corrected rocketserializer inertia swap: %s -> %s", _raw_inertia, inertia_corrected
+        )
+    else:
+        inertia_corrected = _raw_inertia
+
     rocket = Rocket(
         radius=rkt_params["radius"],
         mass=rkt_params["mass"],
-        inertia=tuple(rkt_params["inertia"]),
+        inertia=inertia_corrected,
         power_off_drag=drag_csv,
         power_on_drag=drag_csv,
         center_of_mass_without_motor=rkt_params["center_of_mass_without_propellant"],
+        coordinate_system_orientation=rkt_params.get(
+            "coordinate_system_orientation", "nose_to_tail"
+        ),
     )
 
     # Motor — position stored in motor_params
@@ -146,17 +189,18 @@ def run_rocketpy(
             base_radius=nc.get("base_radius"),
         )
 
-    # Trapezoidal fins — empty dict or dict-of-dicts
+    # Trapezoidal fins
     fins_raw = params.get("trapezoidal_fins", {})
     fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else fins_raw
+    logger.info("fin_list count=%d keys=%s", len(fin_list), list(fins_raw.keys()))
     for fin in fin_list:
-        rocket.add_trapezoidal_fins(
-            n=fin["n"],
-            root_chord=fin["root_chord"],
-            tip_chord=fin["tip_chord"],
-            span=fin["span"],
-            position=fin["position"],
+        kwargs = dict(
+            n=fin["n"], root_chord=fin["root_chord"], tip_chord=fin["tip_chord"],
+            span=fin["span"], position=fin["position"],
         )
+        if "sweep_length" in fin:
+            kwargs["sweep_length"] = fin["sweep_length"]
+        rocket.add_trapezoidal_fins(**kwargs)
 
     # Tails — empty list or dict-of-dicts
     tails_raw = params.get("tails", [])
@@ -193,6 +237,30 @@ def run_rocketpy(
         )
 
     # ------------------------------------------------------------------
+    # Rocket diagram (base64 PNG, dark-themed)
+    # ------------------------------------------------------------------
+    rocket_diagram = None
+    try:
+        import io
+        import base64
+        import matplotlib.pyplot as plt
+        with plt.style.context('dark_background'):
+            draw_result = rocket.draw()
+            fig = draw_result[0] if isinstance(draw_result, (tuple, list)) else draw_result.figure
+            fig.patch.set_facecolor('#111827')
+            for ax in (fig.get_axes() or []):
+                ax.set_facecolor('#1f2937')
+                for spine in ax.spines.values():
+                    spine.set_edgecolor('#374151')
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#111827')
+            buf.seek(0)
+            rocket_diagram = base64.b64encode(buf.read()).decode('utf-8')
+            plt.close(fig)
+    except Exception as exc:
+        logger.warning("rocket.draw() failed: %s", exc)
+
+    # ------------------------------------------------------------------
     # 4. Flight
     # ------------------------------------------------------------------
     flight = Flight(
@@ -201,6 +269,7 @@ def run_rocketpy(
         rail_length=rail_length,
         inclination=inclination,
         heading=heading,
+        max_time=600,
     )
 
     # ------------------------------------------------------------------
@@ -215,11 +284,27 @@ def run_rocketpy(
     out_of_rail_velocity = float(flight.out_of_rail_velocity)
     burn_out_time_s = float(motor.burn_out_time)
 
-    # Static margin at t=0
+    # Stability margin at rail departure (most meaningful launch metric)
     try:
-        static_margin_cal = float(flight.static_margin(0))
+        static_margin_cal = float(flight.out_of_rail_stability_margin)
     except Exception:
-        static_margin_cal = 0.0
+        try:
+            cp0 = rocket.cp_position(0)
+            cg0 = rocket.center_of_mass(0)
+            cso = rkt_params.get("coordinate_system_orientation", "nose_to_tail")
+            _stab_sign = -1 if cso == "tail_to_nose" else 1
+            static_margin_cal = float(_stab_sign * (cp0 - cg0) / (2 * rkt_params["radius"]))
+        except Exception:
+            static_margin_cal = 0.0
+
+    # % stability = calibers × diameter / rocket_length × 100
+    # rocket_length ≈ motor position from nose + nozzle extension below motor
+    reference_diameter = 2.0 * rkt_params["radius"]
+    rocket_length = motor_params["position"] + abs(motor_params.get("nozzle_position", 0))
+    if rocket_length > 0 and reference_diameter > 0:
+        static_margin_pct = static_margin_cal * reference_diameter / rocket_length * 100.0
+    else:
+        static_margin_pct = 0.0
 
     # ------------------------------------------------------------------
     # 6. Timeseries (downsampled to ≤500 pts)
@@ -231,15 +316,6 @@ def run_rocketpy(
     # Use altitude time axis as the canonical time vector
     time_arr = alt_t
     n = len(time_arr)
-
-    # Stability — try .source first, fall back to scalar broadcast
-    try:
-        _, stab_v = _source_cols(flight.static_margin)
-        # Resample to match altitude time axis if sizes differ
-        if len(stab_v) != n:
-            stab_v = np.interp(time_arr, _source_cols(flight.static_margin)[0], stab_v)
-    except Exception:
-        stab_v = np.full(n, static_margin_cal)
 
     # Thrust — from motor Function
     try:
@@ -258,6 +334,14 @@ def run_rocketpy(
         mach_resampled = np.interp(time_arr, mach_t, mach_v)
     except Exception:
         mach_resampled = np.zeros(n)
+
+    # Dynamic stability — use flight.stability_margin (RocketPy Function of time)
+    # accounts for both Mach-dependent CP and time-varying CG as propellant burns
+    try:
+        stab_t, stab_raw = _source_cols(flight.stability_margin)
+        stab_v = np.interp(time_arr, stab_t, stab_raw)
+    except Exception:
+        stab_v = np.full(n, static_margin_cal)
 
     # Build downsampled lists
     step = max(1, n // 500)
@@ -284,19 +368,43 @@ def run_rocketpy(
         traj_y = y_src[:, 1]  # North
         traj_z = z_src[:, 1]  # Up
 
-        m = len(traj_t)
-        t_step = max(1, m // 500)
-        t_idx = np.arange(0, m, t_step)
+        # Resample onto a uniform time grid so animation speed matches real time.
+        # The ODE solver uses adaptive steps: dense during ascent, sparse during
+        # parachute descent. Index-based subsampling would over-represent ascent.
+        t_uniform = np.linspace(traj_t[0], traj_t[-1], 500)
+        traj_x_rs = np.interp(t_uniform, traj_t, traj_x)
+        traj_y_rs = np.interp(t_uniform, traj_t, traj_y)
+        traj_z_rs = np.interp(t_uniform, traj_t, traj_z)
 
         trajectory_3d = {
-            "t": traj_t[t_idx].tolist(),
-            "x": traj_x[t_idx].tolist(),
-            "y": traj_y[t_idx].tolist(),
-            "z": traj_z[t_idx].tolist(),
+            "t": t_uniform.tolist(),
+            "x": traj_x_rs.tolist(),
+            "y": traj_y_rs.tolist(),
+            "z": traj_z_rs.tolist(),
         }
+
+        # Nose orientation — velocity unit vector (nose ≈ direction of travel)
+        try:
+            vx_src = np.asarray(flight.vx.source)
+            vy_src = np.asarray(flight.vy.source)
+            vz_src = np.asarray(flight.vz.source)
+            vx_v = np.interp(t_uniform, vx_src[:, 0], vx_src[:, 1])
+            vy_v = np.interp(t_uniform, vy_src[:, 0], vy_src[:, 1])
+            vz_v = np.interp(t_uniform, vz_src[:, 0], vz_src[:, 1])
+            spd = np.sqrt(vx_v**2 + vy_v**2 + vz_v**2)
+            spd = np.where(spd < 1e-6, 1.0, spd)
+            trajectory_3d["ux"] = (vx_v / spd).tolist()
+            trajectory_3d["uy"] = (vy_v / spd).tolist()
+            trajectory_3d["uz"] = (vz_v / spd).tolist()
+        except Exception as exc2:
+            logger.warning("Could not extract orientation vectors: %s", exc2)
+            trajectory_3d["ux"] = []
+            trajectory_3d["uy"] = []
+            trajectory_3d["uz"] = []
+
     except Exception as exc:
         logger.warning("Could not extract 3-D trajectory: %s", exc)
-        trajectory_3d = {"t": [], "x": [], "y": [], "z": []}
+        trajectory_3d = {"t": [], "x": [], "y": [], "z": [], "ux": [], "uy": [], "uz": []}
 
     # ------------------------------------------------------------------
     # 8. KML export
@@ -324,8 +432,13 @@ def run_rocketpy(
         "max_acceleration_ms2": max_acceleration_ms2,
         "out_of_rail_velocity": out_of_rail_velocity,
         "static_margin_cal": static_margin_cal,
+        "static_margin_pct": static_margin_pct,
         "burn_out_time_s": burn_out_time_s,
         "timeseries": timeseries,
         "trajectory_3d": trajectory_3d,
         "weather_source": weather_source,
+        "rocket_diagram": rocket_diagram,
+        "launch_lat": lat,
+        "launch_lon": lon,
+        "launch_elevation_m": elevation,
     }

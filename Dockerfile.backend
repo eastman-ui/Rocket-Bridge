@@ -15,6 +15,29 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# NOMADS GFS now returns isobaric levels in Pa; RocketPy's get_pressure_levels_from_file
+# in tools.py still blindly applies *100 (mbar->Pa), giving 100x pressure/density.
+# Fix: only multiply when values are mbar (max <= 1100); skip if already in Pa.
+RUN python3 - <<'PYEOF'
+import inspect, rocketpy.environment.tools as t
+path = inspect.getfile(t)
+with open(path) as f:
+    src = f.read()
+old = '        # Convert mbar to Pa\n        levels = 100 * data.variables[dictionary["level"]][:]'
+new = ('        levels = data.variables[dictionary["level"]][:]\n'
+       '        # NOMADS now returns Pa; only multiply if values look like mbar (max <= 1100)\n'
+       '        if float(levels.max()) <= 1100:\n'
+       '            levels = 100 * levels  # mbar to Pa')
+assert old in src, f"Pattern not found in {path}"
+with open(path, 'w') as f:
+    f.write(src.replace(old, new, 1))
+print("Patched tools.py:", path)
+PYEOF
+
+# Revert stray patch to environment.py Windy path (applied in earlier build, wrong location)
+RUN ENVPY=$(python3 -c "import rocketpy.environment.environment as e; import inspect; print(inspect.getfile(e))") && \
+    sed -i 's/            pressure_levels,  # NOMADS returns Pa directly (hPa->Pa patch)/            100 * pressure_levels,  # Convert hPa to Pa/' "$ENVPY" || true
+
 COPY backend/ .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

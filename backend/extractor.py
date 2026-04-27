@@ -205,6 +205,7 @@ def extract_or_results_from_stored(stored_results: dict) -> dict:
     )
 
     timeseries = stored_results.get("or_timeseries")
+    or_launch_rod_length_m = _find(stored_results, "or_launch_rod_length_m")
 
     return {
         "apogee_m_agl": apogee_m_agl,
@@ -215,4 +216,5 @@ def extract_or_results_from_stored(stored_results: dict) -> dict:
         "velocity_off_rail_ms": velocity_off_rail_ms,
         "stability_margin_cal": stability_margin_cal,
         "timeseries": timeseries,
+        "or_launch_rod_length_m": or_launch_rod_length_m,
     }

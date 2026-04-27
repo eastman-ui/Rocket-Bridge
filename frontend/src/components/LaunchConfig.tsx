@@ -95,6 +95,7 @@ interface LaunchConfigProps {
   onChange: (config: LaunchConfig) => void;
   disabled: boolean;
   unitSystem: UnitSystem;
+  orRailLengthM?: number;
 }
 
 const M_FT = 3.28084;
@@ -146,6 +147,7 @@ export default function LaunchConfigForm({
   onChange,
   disabled,
   unitSystem,
+  orRailLengthM,
 }: LaunchConfigProps) {
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState<string | null>(null);
@@ -172,12 +174,16 @@ export default function LaunchConfigForm({
         const lat = parseFloat(pos.coords.latitude.toFixed(5));
         const lon = parseFloat(pos.coords.longitude.toFixed(5));
         try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 5000);
           const res = await fetch(
-            `https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lon}`,
+            `https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lon}`,
+            { signal: ctrl.signal },
           );
+          clearTimeout(timer);
           const json = await res.json();
-          const elev = json?.results?.[0]?.elevation ?? config.elevation;
-          onChange({ ...config, lat, lon, elevation: elev });
+          const elev = json?.elevation?.[0] ?? config.elevation;
+          onChange({ ...config, lat, lon, elevation: Math.round(elev) });
         } catch {
           onChange({ ...config, lat, lon });
         }
@@ -199,9 +205,17 @@ export default function LaunchConfigForm({
           type="button"
           onClick={handleUseMyLocation}
           disabled={disabled || locating}
-          className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          title="Use my location"
+          className="flex items-center justify-center w-8 h-8 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
-          {locating ? 'Locating...' : 'Use my location'}
+          {locating ? (
+            <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <circle cx="12" cy="12" r="4" />
+              <path strokeLinecap="round" d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+            </svg>
+          )}
         </button>
       </div>
       {locError && (
@@ -241,17 +255,29 @@ export default function LaunchConfigForm({
           step={imp ? 10 : 1}
           scale={imp ? M_FT : 1}
         />
-        <Field
-          label="Rail Length"
-          unit={imp ? 'ft' : 'm'}
-          value={config.railLength}
-          field="railLength"
-          config={config}
-          onChange={onChange}
-          disabled={disabled}
-          step={imp ? 0.5 : 0.1}
-          scale={imp ? M_FT : 1}
-        />
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
+            <label className="text-sm text-gray-400">
+              Rail Length
+              <span className="ml-1 text-gray-500">{imp ? 'ft' : 'm'}</span>
+            </label>
+            {orRailLengthM != null && Math.abs(config.railLength - orRailLengthM) < 0.001 && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 border border-blue-700/50">
+                from OR file
+              </span>
+            )}
+          </div>
+          <input
+            type="number"
+            value={parseFloat((config.railLength * (imp ? M_FT : 1)).toFixed(imp ? 1 : 3))}
+            step={imp ? 0.5 : 0.1}
+            disabled={disabled}
+            onChange={(e) =>
+              onChange({ ...config, railLength: parseFloat(e.target.value) / (imp ? M_FT : 1) })
+            }
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+          />
+        </div>
         <Field
           label="Inclination"
           unit="°"

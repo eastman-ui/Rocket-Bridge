@@ -74,6 +74,8 @@ def convert_ork(ork_path: str, output_dir: str) -> dict:
     _fix_motor_dry_mass(ork_path, params)
     _extract_motor_designation(ork_path, params)
     _extract_or_stored_timeseries(ork_path, params)
+    _fix_trap_fin_positions_from_ork(ork_path, params)
+    _fix_rocket_mass(params)
 
     return params
 
@@ -350,6 +352,17 @@ def _extract_or_stored_timeseries(ork_path: str, params: dict) -> None:
                 else:
                     arrays[name].append(float("nan"))
 
+        # Extract OR simulation conditions (rail length, altitude) for comparison context
+        cond_m = re.search(r'<conditions>(.*?)</conditions>', content, re.DOTALL | re.IGNORECASE)
+        if cond_m:
+            cond_sec = cond_m.group(1)
+            rl_m = re.search(r'<launchrodlength>([\d.eE+\-]+)</launchrodlength>', cond_sec, re.IGNORECASE)
+            if rl_m:
+                params.setdefault("stored_results", {})["or_launch_rod_length_m"] = float(rl_m.group(1))
+            alt_m = re.search(r'<launchaltitude>([\d.eE+\-]+)</launchaltitude>', cond_sec, re.IGNORECASE)
+            if alt_m:
+                params.setdefault("stored_results", {})["or_launch_altitude_m"] = float(alt_m.group(1))
+
         stab_list = arrays["Stability margin calibers"]
         launch_stab = next((s for s in stab_list if not math.isnan(s)), None)
         if launch_stab is not None:
@@ -379,6 +392,194 @@ def _extract_or_stored_timeseries(ork_path: str, params: dict) -> None:
         )
     except Exception as exc:
         logger.warning("_extract_or_stored_timeseries: failed (%s)", exc)
+
+
+def _fix_fin_positions(ork_path: str, params: dict) -> None:
+    """Fix fin leading-edge positions in params.
+
+    rocketserializer exports fin position as the absolute position of the
+    trailing edge of the root chord when the OR fin uses
+    axialoffset method='bottom'.  RocketPy's add_trapezoidal_fins(position=…)
+    expects the leading edge.  Subtract root_chord when the OR source method
+    is 'bottom' (or 'after', which is synonymous).
+    """
+    try:
+        content = _read_ork_xml(ork_path)
+
+        # Build a list of (axialoffset_method, root_chord) from the XML fin sets.
+        # OR uses <trapezoidfinset> or <trapezoidalfinset>.
+        fin_sections = re.findall(
+            r'<trapezoid(?:al)?finset>(.*?)</trapezoid(?:al)?finset>',
+            content, re.DOTALL | re.IGNORECASE
+        )
+        if not fin_sections:
+            return
+
+        xml_fins = []
+        for fs in fin_sections:
+            method_m = re.search(r'<axialoffset\s+method="([^"]+)"', fs, re.IGNORECASE)
+            method = method_m.group(1).lower() if method_m else "top"
+            rc_m = re.search(r'<rootchord>([\d.eE+\-]+)</rootchord>', fs, re.IGNORECASE)
+            root_chord = float(rc_m.group(1)) if rc_m else 0.0
+            xml_fins.append((method, root_chord))
+
+        fins_raw = params.get("trapezoidal_fins", {})
+        fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else fins_raw
+
+        for i, fin in enumerate(fin_list):
+            if i >= len(xml_fins):
+                break
+            method, root_chord_xml = xml_fins[i]
+            if method in ("bottom", "after") and root_chord_xml > 0:
+                old_pos = float(fin.get("position", 0) or 0)
+                corrected = old_pos - root_chord_xml
+                fin["position"] = round(corrected, 6)
+                logger.info(
+                    "_fix_fin_positions: fin %d method=%s pos %.4f -> %.4f (root_chord=%.4f)",
+                    i, method, old_pos, corrected, root_chord_xml,
+                )
+    except Exception as exc:
+        logger.warning("_fix_fin_positions: failed (%s)", exc)
+
+
+def _fix_trap_fin_positions_from_ork(ork_path: str, params: dict) -> None:
+    """Recompute trapezoid fin leading-edge positions from the OR XML component hierarchy.
+
+    rocketserializer mis-computes absolute fin positions when the fin axialoffset
+    method is 'bottom' (root trailing edge at body-tube aft).  We re-derive positions
+    by sequentially summing nosecone + outer body-tube lengths to find the parent
+    tube's absolute aft position, then apply:
+        fin_LE_abs = parent.aft - ao_offset - root_chord   (method=bottom)
+        fin_LE_abs = parent.start + ao_offset              (method=top)
+    """
+    try:
+        content = _read_ork_xml(ork_path)
+
+        fins_raw = params.get("trapezoidal_fins", {})
+        if not fins_raw:
+            return
+
+        # Nosecone length (always starts at x=0 from nose tip)
+        nc_m = re.search(r'<nosecone>.*?<length>([\d.eE+\-]+)</length>', content, re.DOTALL | re.IGNORECASE)
+        nc_len = float(nc_m.group(1)) if nc_m else 0.0
+
+        # Outer body tubes (<bodytube>, not <innertube>) in document order
+        bt_data: list[tuple[int, int, float]] = []  # (xml_start, xml_end, length)
+        for m in re.finditer(r'<bodytube>(.*?)</bodytube>', content, re.DOTALL | re.IGNORECASE):
+            ln_m = re.search(r'<length>([\d.eE+\-]+)</length>', m.group(1), re.IGNORECASE)
+            if ln_m:
+                bt_data.append((m.start(), m.end(), float(ln_m.group(1))))
+
+        if not bt_data:
+            return
+
+        fin_param_keys = list(fins_raw.keys()) if isinstance(fins_raw, dict) else list(range(len(fins_raw)))
+        fin_xml_iters = list(re.finditer(
+            r'<trapezoidfinset>(.*?)</trapezoidfinset>', content, re.DOTALL | re.IGNORECASE
+        ))
+
+        for i, (fin_key, fin_m) in enumerate(zip(fin_param_keys, fin_xml_iters)):
+            fin_xml_start = fin_m.start()
+            fin_section = fin_m.group(1)
+
+            # axialoffset method and value (prefer <axialoffset>, fall back to <position type=...>)
+            ao_m = re.search(
+                r'<axialoffset\s+method="([^"]+)"\s*>([\d.eE+\-]+)</axialoffset>',
+                fin_section, re.IGNORECASE,
+            ) or re.search(
+                r'<position\s+type="([^"]+)"\s*>([\d.eE+\-]+)</position>',
+                fin_section, re.IGNORECASE,
+            )
+            ao_method = ao_m.group(1).lower() if ao_m else "top"
+            ao_value = float(ao_m.group(2)) if ao_m else 0.0
+
+            rc_m = re.search(r'<rootchord>([\d.eE+\-]+)</rootchord>', fin_section, re.IGNORECASE)
+            root_chord = float(rc_m.group(1)) if rc_m else 0.0
+            if root_chord <= 0:
+                continue
+
+            # Find nearest enclosing outer bodytube
+            parent_idx = -1
+            for j, (bt_start, bt_end, _) in enumerate(bt_data):
+                if bt_start < fin_xml_start < bt_end:
+                    parent_idx = j  # last match = innermost enclosing tube
+
+            if parent_idx < 0:
+                logger.warning("_fix_trap_fin_positions: fin[%s] not inside any bodytube — skipping", fin_key)
+                continue
+
+            # Sequential absolute aft position of parent (NC + all bodytubes up to parent)
+            parent_aft_abs = nc_len + sum(bt_data[k][2] for k in range(parent_idx + 1))
+            parent_start_abs = parent_aft_abs - bt_data[parent_idx][2]
+
+            if ao_method in ("bottom", "after"):
+                fin_le_abs = parent_aft_abs - ao_value - root_chord
+            else:
+                fin_le_abs = parent_start_abs + ao_value
+
+            fin_le_abs = max(0.0, round(fin_le_abs, 6))
+
+            fin = fins_raw[fin_key] if isinstance(fins_raw, dict) else fins_raw[fin_key]
+            old_pos = fin.get("position", 0)
+            fin["position"] = fin_le_abs
+            logger.info(
+                "_fix_trap_fin_positions: fin[%s] pos %.4f -> %.4f m "
+                "(method=%s, offset=%.4f, rc=%.4f, parent_aft=%.4f)",
+                fin_key, old_pos, fin_le_abs, ao_method, ao_value, root_chord, parent_aft_abs,
+            )
+
+    except Exception as exc:
+        logger.warning("_fix_trap_fin_positions: failed (%s) — keeping serializer value", exc)
+
+
+def _fix_rocket_mass(params: dict) -> None:
+    """Remove motor dry mass from rocket.mass.
+
+    rocketserializer exports rocket.mass as the total final (dry) system mass
+    = airframe + motor casing.  RocketPy's Rocket(mass=…) expects the airframe
+    alone; the motor is then added as a separate SolidMotor object which
+    already carries dry_mass.  Without this fix we double-count the motor
+    casing, making the rocket heavier and producing wrong velocity/acceleration.
+
+    Also adjust center_of_mass_without_motor: rocketserializer exports the CG
+    of the combined (airframe + motor-dry) system; subtract out the motor dry
+    contribution to get the airframe-only CG for RocketPy.
+    """
+    try:
+        rkt  = params["rocket"]
+        mtr  = params["motors"]
+
+        total_dry_mass = float(rkt.get("mass", 0) or 0)
+        motor_dry_mass = float(mtr.get("dry_mass", 0) or 0)
+        airframe_mass  = total_dry_mass - motor_dry_mass
+        if airframe_mass <= 0:
+            return  # data looks wrong — don't corrupt it
+
+        # CG adjustment: back out the motor dry contribution.
+        # motor_params["position"] is the motor aft face (nozzle reference) in nose_to_tail
+        # rocket coordinates.  For nozzle_to_combustion_chamber orientation, motor internal
+        # +x increases toward the combustion chamber (= toward nose = decreasing rocket x).
+        # So motor dry CG in rocket coords = motor_pos - grain_stack_h / 2.
+        _motor_pos  = float(mtr.get("position", 0) or 0)
+        grain_h     = float(mtr.get("grain_initial_height", 0.1) or 0.1)
+        grain_n     = max(1, int(mtr.get("grain_number", 1) or 1))
+        stack_h     = grain_h * grain_n
+        motor_dry_cg_rocket = _motor_pos - stack_h / 2.0
+
+        total_dry_cg = float(rkt.get("center_of_mass_without_propellant", _motor_pos * 0.5) or _motor_pos * 0.5)
+        airframe_cg  = (
+            (total_dry_cg * total_dry_mass - motor_dry_cg_rocket * motor_dry_mass)
+            / airframe_mass
+        )
+
+        rkt["mass"] = round(airframe_mass, 5)
+        rkt["center_of_mass_without_propellant"] = round(airframe_cg, 5)
+        logger.info(
+            "_fix_rocket_mass: mass %.3f->%.3f kg, cm %.4f->%.4f m",
+            total_dry_mass, airframe_mass, total_dry_cg, airframe_cg,
+        )
+    except Exception as exc:
+        logger.warning("_fix_rocket_mass: failed (%s)", exc)
 
 
 def get_stored_results(params: dict) -> dict:

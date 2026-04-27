@@ -27,6 +27,7 @@ class ORResults(BaseModel):
     velocity_off_rail_ms: Optional[float] = None
     stability_margin_cal: Optional[float] = None
     timeseries: Optional[TimeSeriesData] = None
+    or_launch_rod_length_m: Optional[float] = None
 
 class RocketPyResults(BaseModel):
     apogee_m_asl: float
@@ -57,10 +58,16 @@ class RocketParams(BaseModel):
     fin_count: int = 0
     parachute_count: int = 0
 
+class HourlyLanding(BaseModel):
+    hour: str   # ISO datetime, e.g. "2026-04-27T18:00"
+    lat: float
+    lon: float
+
 class ComparisonResponse(BaseModel):
     or_results: ORResults
     rocketpy_results: RocketPyResults
     kml_available: bool = False
-    kml_data: Optional[str] = None  # KML file contents for download / map display
+    kml_data: Optional[str] = None
     rocket_params: Optional[RocketParams] = None
-    rocket_diagram: Optional[str] = None  # base64-encoded PNG
+    rocket_diagram: Optional[str] = None
+    hourly_landings: list[HourlyLanding] = []

@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from converter import convert_ork, get_stored_results
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
-from models import ComparisonResponse, ORResults, RocketParams, RocketPyResults, TimeSeriesData, Trajectory3D
+from models import ComparisonResponse, HourlyLanding, ORResults, RocketParams, RocketPyResults, TimeSeriesData, Trajectory3D
 
 # Path to OpenRocket JAR — user sets this via env var or config
 OR_JAR_PATH = os.getenv("OR_JAR_PATH", "./OpenRocket-23.09.jar")
@@ -70,7 +70,7 @@ def _extract_rocket_params(params: dict) -> dict:
 
     fins_raw = params.get("trapezoidal_fins", {})
     fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else fins_raw
-    fin_count = sum(int(f.get("n", 0)) for f in fin_list) if fin_list else 0
+    fin_count = sum(int(f.get("n", f.get("number", f.get("count", 0)))) for f in fin_list) if fin_list else 0
 
     chutes_raw = params.get("parachutes", {})
     chute_list = list(chutes_raw.values()) if isinstance(chutes_raw, dict) else chutes_raw
@@ -153,6 +153,7 @@ async def simulate(
             velocity_off_rail_ms=or_results_raw.get("velocity_off_rail_ms"),
             stability_margin_cal=or_results_raw.get("stability_margin_cal"),
             timeseries=timeseries_or,
+            or_launch_rod_length_m=or_results_raw.get("or_launch_rod_length_m"),
         )
 
         # Step 5: Build RocketPyResults
@@ -192,6 +193,7 @@ async def simulate(
             kml_data=kml_data,
             rocket_params=rocket_params,
             rocket_diagram=rocketpy_raw.get("rocket_diagram"),
+            hourly_landings=[HourlyLanding(**h) for h in rocketpy_raw.get("hourly_landings", [])],
         )
 
     except HTTPException:

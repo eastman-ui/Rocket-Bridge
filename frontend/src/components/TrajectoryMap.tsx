@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import type { Trajectory3D } from '../types';
+import type { HourlyLanding, Trajectory3D } from '../types';
 import type { WeatherData } from './WeatherPanel';
 
 interface Props {
@@ -15,6 +15,7 @@ interface Props {
   weatherData?: WeatherData;
   weatherIsImperial?: boolean;
   launchDateTime?: string;
+  hourlyLandings?: HourlyLanding[];
 }
 
 const DRIFT_P_LEVELS = [1000, 925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10] as const;
@@ -135,6 +136,7 @@ export function TrajectoryMap({
   trajectory, launchLat, launchLon, launchElevationM,
   apogeeTimeS, burnOutTimeS, kmlData,
   weatherData, weatherIsImperial, launchDateTime,
+  hourlyLandings,
 }: Props) {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
@@ -245,53 +247,73 @@ export function TrajectoryMap({
 
     // ── Drift predictions ──────────────────────────────────────────────────────
     const driftLatLons: [number, number][] = [];
-    if (weatherData && showDrift) {
-      const hourly = weatherData.hourly;
-      const times = hourly.time as string[];
-      const speedToMs = weatherIsImperial ? 0.44704 : (1 / 3.6);
+    const hasServerLandings = hourlyLandings && hourlyLandings.length > 0;
 
-      const pivot = launchDateTime ?? new Date().toISOString().slice(0, 16);
-      const pivotMs = new Date(pivot).getTime();
-      const driftHours: { idx: number; label: string }[] = [];
-      for (let i = 0; i < times.length && driftHours.length < 8; i++) {
-        const tMs = new Date(times[i]).getTime();
-        if (tMs < pivotMs - 3 * 3600_000) continue;
-        if (tMs > pivotMs + 21 * 3600_000) break;
-        if ((new Date(times[i]).getHours()) % 3 !== 0) continue;
-        driftHours.push({
-          idx: i,
-          label: new Date(times[i]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    if (showDrift) {
+      const driftGroup = L.layerGroup().addTo(map);
+
+      if (hasServerLandings) {
+        // GFS-based predictions from simulation backend
+        hourlyLandings!.forEach((pred, ci) => {
+          const color = DRIFT_COLORS[ci % DRIFT_COLORS.length];
+          const label = new Date(pred.hour).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          driftLatLons.push([pred.lat, pred.lon]);
+          L.marker([pred.lat, pred.lon], {
+            icon: L.divIcon({
+              html: `<div style="width:10px;height:10px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>`,
+              className: '', iconSize: [10, 10], iconAnchor: [5, 5],
+            }),
+          })
+            .bindPopup(`<b>GFS Landing Prediction</b><br>${label}<br>Lat: ${pred.lat.toFixed(5)}<br>Lon: ${pred.lon.toFixed(5)}`)
+            .addTo(driftGroup);
+          L.marker([pred.lat, pred.lon], {
+            icon: L.divIcon({
+              html: `<div style="font-size:10px;color:${color};font-weight:600;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000">${label}</div>`,
+              className: '', iconSize: [50, 14], iconAnchor: [25, 20],
+            }),
+            interactive: false, zIndexOffset: -1,
+          }).addTo(driftGroup);
+        });
+
+      } else if (weatherData) {
+        // Fallback: open-meteo client-side predictions (pre-simulation)
+        const hourly = weatherData.hourly;
+        const times = hourly.time as string[];
+        const speedToMs = weatherIsImperial ? 0.44704 : (1 / 3.6);
+        const pivot = launchDateTime ?? new Date().toISOString().slice(0, 16);
+        const pivotMs = new Date(pivot).getTime();
+        const driftHours: { idx: number; label: string }[] = [];
+        for (let i = 0; i < times.length && driftHours.length < 8; i++) {
+          const tMs = new Date(times[i]).getTime();
+          if (tMs < pivotMs - 3 * 3600_000) continue;
+          if (tMs > pivotMs + 21 * 3600_000) break;
+          if ((new Date(times[i]).getHours()) % 3 !== 0) continue;
+          driftHours.push({ idx: i, label: new Date(times[i]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+        }
+        driftHours.forEach(({ idx, label }, ci) => {
+          const [pLat, pLon] = predictLanding(
+            trajectory, apogeeTimeS, launchLat, launchLon,
+            launchElevationM, hourly, idx, speedToMs,
+          );
+          driftLatLons.push([pLat, pLon]);
+          const color = DRIFT_COLORS[ci % DRIFT_COLORS.length];
+          L.marker([pLat, pLon], {
+            icon: L.divIcon({
+              html: `<div style="width:10px;height:10px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>`,
+              className: '', iconSize: [10, 10], iconAnchor: [5, 5],
+            }),
+          })
+            .bindPopup(`<b>Predicted Landing</b><br>${label}<br>Lat: ${pLat.toFixed(5)}<br>Lon: ${pLon.toFixed(5)}`)
+            .addTo(driftGroup);
+          L.marker([pLat, pLon], {
+            icon: L.divIcon({
+              html: `<div style="font-size:10px;color:${color};font-weight:600;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000">${label}</div>`,
+              className: '', iconSize: [50, 14], iconAnchor: [25, 20],
+            }),
+            interactive: false, zIndexOffset: -1,
+          }).addTo(driftGroup);
         });
       }
-
-      const driftGroup = L.layerGroup().addTo(map);
-      driftHours.forEach(({ idx, label }, ci) => {
-        const [pLat, pLon] = predictLanding(
-          trajectory, apogeeTimeS, launchLat, launchLon,
-          launchElevationM, hourly, idx, speedToMs,
-        );
-        driftLatLons.push([pLat, pLon]);
-        const color = DRIFT_COLORS[ci % DRIFT_COLORS.length];
-        const icon = L.divIcon({
-          html: `<div style="width:10px;height:10px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>`,
-          className: '',
-          iconSize: [10, 10],
-          iconAnchor: [5, 5],
-        });
-        L.marker([pLat, pLon], { icon })
-          .bindPopup(`<b>Predicted Landing</b><br>${label}<br>Lat: ${pLat.toFixed(5)}<br>Lon: ${pLon.toFixed(5)}`)
-          .addTo(driftGroup);
-        L.marker([pLat, pLon], {
-          icon: L.divIcon({
-            html: `<div style="font-size:10px;color:${color};font-weight:600;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000">${label}</div>`,
-            className: '',
-            iconSize: [50, 14],
-            iconAnchor: [25, 20],
-          }),
-          interactive: false,
-          zIndexOffset: -1,
-        }).addTo(driftGroup);
-      });
     }
 
     // Fit map to trajectory + all drift prediction bounds
@@ -303,14 +325,14 @@ export function TrajectoryMap({
       map.remove();
       leafletMap.current = null;
     };
-  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, weatherIsImperial, launchDateTime]);
+  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, weatherIsImperial, launchDateTime, hourlyLandings]);
 
   return (
     <div className="bg-gray-900 rounded-xl p-4">
       <div className="flex items-center justify-between mb-0.5">
         <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Map Trajectory</h2>
         <div className="flex items-center gap-2">
-          {weatherData && (
+          {(hourlyLandings?.length || weatherData) && (
             <button
               onClick={() => setShowDrift(v => !v)}
               className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
@@ -319,7 +341,8 @@ export function TrajectoryMap({
                   : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-white'
               }`}
             >
-              {showDrift ? 'Hide drift forecast' : 'Show drift forecast'}
+              {showDrift ? 'Hide landing forecast' : 'Show landing forecast'}
+              {hourlyLandings?.length ? <span className="ml-1.5 text-[10px] opacity-60">GFS</span> : null}
             </button>
           )}
           {kmlData && (
@@ -337,7 +360,7 @@ export function TrajectoryMap({
       </div>
       <p className="text-gray-600 text-xs mb-3">
         Satellite overlay · altitude color gradient (blue → red) · click markers for details
-        {weatherData && showDrift && ' · colored dots = predicted landing per forecast hour'}
+        {showDrift && hourlyLandings?.length ? ' · colored dots = GFS landing prediction per 3-hour slot' : showDrift && weatherData ? ' · colored dots = predicted landing per forecast hour' : null}
       </p>
       <div ref={mapRef} className="rounded-lg overflow-hidden" style={{ height: 480 }} />
       {/* Altitude legend */}

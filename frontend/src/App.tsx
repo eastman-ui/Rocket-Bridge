@@ -15,52 +15,6 @@ import type { LaunchConfig } from './components/LaunchConfig';
 import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
 import type { ComparisonResponse } from './types';
 
-const M_FT = 3.28084;
-
-function QuickStat({
-  label,
-  rpyValue,
-  orValue,
-  unit,
-  decimals = 0,
-}: {
-  label: string;
-  rpyValue: number;
-  orValue?: number;
-  unit: string;
-  decimals?: number;
-}) {
-  const fmt = (v: number) =>
-    v >= 1000
-      ? v.toLocaleString('en-US', { maximumFractionDigits: decimals })
-      : v.toFixed(decimals);
-
-  const delta = orValue != null ? ((rpyValue - orValue) / orValue) * 100 : null;
-  const deltaColor =
-    delta === null ? '' :
-    Math.abs(delta) <= 5 ? 'text-green-400' :
-    Math.abs(delta) <= 15 ? 'text-yellow-400' : 'text-red-400';
-
-  return (
-    <div className="bg-gray-800/60 rounded-lg px-3 py-2.5">
-      <p className="text-xs text-gray-500 uppercase tracking-wide font-medium mb-0.5">{label}</p>
-      <p className="text-lg font-bold text-white tabular-nums leading-tight">
-        {fmt(rpyValue)}
-        {unit && <span className="text-xs font-normal text-gray-500 ml-1">{unit}</span>}
-      </p>
-      {orValue != null && (
-        <p className="text-xs text-gray-600 mt-0.5">
-          OR {fmt(orValue)}
-          {delta !== null && (
-            <span className={`ml-1 font-semibold ${deltaColor}`}>
-              {delta >= 0 ? '+' : ''}{delta.toFixed(1)}%
-            </span>
-          )}
-        </p>
-      )}
-    </div>
-  );
-}
 
 function LoadingSpinner() {
   return (
@@ -113,11 +67,12 @@ export default function App() {
   const [config, setConfig] = useState<LaunchConfig>(defaultConfig);
   const [results, setResults] = useState<ComparisonResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [unitSystem, setUnitSystem] = useState<UnitSystem>('metric');
+  const [unitSystem, setUnitSystem] = useState<UnitSystem>('imperial');
   const [stabilityUnit, setStabilityUnit] = useState<StabilityUnit>('cal');
   const [panelOpen, setPanelOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
+  const [orRailLengthM, setOrRailLengthM] = useState<number | null>(null);
 
   const handleSimulate = async () => {
     if (!selectedFile) return;
@@ -143,6 +98,11 @@ export default function App() {
         formData,
         { headers: { 'Content-Type': 'multipart/form-data' } },
       );
+      const orRailLen = response.data.or_results?.or_launch_rod_length_m ?? null;
+      setOrRailLengthM(orRailLen);
+      if (orRailLen != null) {
+        setConfig(prev => ({ ...prev, railLength: orRailLen }));
+      }
       setResults(response.data);
       setAppState('results');
     } catch (err) {
@@ -221,6 +181,7 @@ export default function App() {
               onChange={setConfig}
               disabled={isSimulating}
               unitSystem={unitSystem}
+              orRailLengthM={orRailLengthM ?? undefined}
             />
             <button
               onClick={handleSimulate}
@@ -269,38 +230,6 @@ export default function App() {
                     />
                   </div>
                 )}
-
-                {/* Quick stats: 2×2 grid */}
-                <div className="grid grid-cols-2 gap-2">
-                  <QuickStat
-                    label="Apogee"
-                    rpyValue={imp ? rpy.apogee_m_agl * M_FT : rpy.apogee_m_agl}
-                    orValue={or_.apogee_m_agl != null ? (imp ? or_.apogee_m_agl * M_FT : or_.apogee_m_agl) : undefined}
-                    unit={imp ? 'ft AGL' : 'm AGL'}
-                    decimals={0}
-                  />
-                  <QuickStat
-                    label="Max Velocity"
-                    rpyValue={imp ? rpy.max_speed_ms * M_FT : rpy.max_speed_ms}
-                    orValue={or_.max_velocity_ms != null ? (imp ? or_.max_velocity_ms * M_FT : or_.max_velocity_ms) : undefined}
-                    unit={imp ? 'ft/s' : 'm/s'}
-                    decimals={1}
-                  />
-                  <QuickStat
-                    label="Max Mach"
-                    rpyValue={rpy.max_mach}
-                    orValue={or_.max_mach}
-                    unit=""
-                    decimals={2}
-                  />
-                  <QuickStat
-                    label="Time to Apogee"
-                    rpyValue={rpy.apogee_time_s}
-                    orValue={or_.time_to_apogee_s}
-                    unit="s"
-                    decimals={1}
-                  />
-                </div>
 
                 <ComparisonTable
                   orResults={or_}
@@ -361,6 +290,7 @@ export default function App() {
               weatherData={weatherData ?? undefined}
               weatherIsImperial={imp}
               launchDateTime={config.weatherDateTime}
+              hourlyLandings={results.hourly_landings}
             />
           </>
         )}

@@ -26,6 +26,7 @@ export interface ORResults {
   velocity_off_rail_ms?: number;
   stability_margin_cal?: number;
   timeseries?: TimeSeriesData;
+  or_launch_rod_length_m?: number;
 }
 
 export interface RocketPyResults {
@@ -59,6 +60,12 @@ export interface RocketParams {
   parachute_count: number;
 }
 
+export interface HourlyLanding {
+  hour: string;
+  lat: number;
+  lon: number;
+}
+
 export interface ComparisonResponse {
   or_results: ORResults;
   rocketpy_results: RocketPyResults;
@@ -66,4 +73,5 @@ export interface ComparisonResponse {
   kml_data?: string;
   rocket_params?: RocketParams;
   rocket_diagram?: string;
+  hourly_landings?: HourlyLanding[];
 }

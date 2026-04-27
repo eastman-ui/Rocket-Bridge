@@ -2,13 +2,13 @@ import logging
 import os
 import warnings
 from datetime import datetime, timezone
+from typing import Optional
 
 import matplotlib
 matplotlib.use("Agg")  # suppress GUI backend before any rocketpy import
 
 import numpy as np
 from rocketpy import Environment, Flight, Rocket, SolidMotor
-from rocketpy.simulation.flight_data_exporter import FlightDataExporter
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ def run_rocketpy(
     heading: float,
     use_live_weather: bool,
     output_dir: str,
-    sim_datetime: str | None = None,
+    sim_datetime: Optional[str] = None,
 ) -> dict:
     """Run RocketPy simulation from a parameters.json dict.
 
@@ -438,7 +438,7 @@ def run_rocketpy(
     # ------------------------------------------------------------------
     kml_path = os.path.join(output_dir, "trajectory.kml")
     try:
-        FlightDataExporter(flight).export_kml(
+        flight.export_kml(
             file_name=kml_path,
             extrude=True,
             altitude_mode="absolute",

@@ -1,5 +1,83 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { UnitSystem } from './TimeSeriesCharts';
+
+interface GeoResult {
+  id: number;
+  name: string;
+  admin1?: string;
+  country?: string;
+  latitude: number;
+  longitude: number;
+  elevation?: number;
+}
+
+function CitySearch({ onSelect, disabled }: {
+  onSelect: (r: GeoResult) => void;
+  disabled: boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<GeoResult[]>([]);
+  const [open, setOpen] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (query.length < 2) { setResults([]); setOpen(false); return; }
+    timerRef.current = setTimeout(async () => {
+      try {
+        const r = await fetch(
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=6&language=en&format=json`
+        );
+        const j = await r.json();
+        setResults(j.results ?? []);
+        setOpen(true);
+      } catch { /* ignore */ }
+    }, 300);
+  }, [query]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="relative col-span-2">
+      <input
+        type="text"
+        placeholder="Search city to auto-fill coordinates..."
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        disabled={disabled}
+        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed placeholder-gray-600"
+      />
+      {open && results.length > 0 && (
+        <div className="absolute z-20 w-full bg-gray-800 border border-gray-700 rounded-lg mt-1 shadow-xl overflow-hidden">
+          {results.map(r => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => { onSelect(r); setQuery(''); setOpen(false); }}
+              className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors border-b border-gray-700/50 last:border-0"
+            >
+              <span className="font-medium">{r.name}</span>
+              {r.admin1 && <span className="text-gray-500">, {r.admin1}</span>}
+              {r.country && <span className="text-gray-500">, {r.country}</span>}
+              <span className="float-right text-gray-600 text-xs tabular-nums">
+                {r.latitude.toFixed(2)}, {r.longitude.toFixed(2)}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export interface LaunchConfig {
   lat: number;
@@ -73,6 +151,15 @@ export default function LaunchConfigForm({
   const [locError, setLocError] = useState<string | null>(null);
   const imp = unitSystem === 'imperial';
 
+  const handleCitySelect = (r: GeoResult) => {
+    onChange({
+      ...config,
+      lat: parseFloat(r.latitude.toFixed(5)),
+      lon: parseFloat(r.longitude.toFixed(5)),
+      elevation: r.elevation ?? config.elevation,
+    });
+  };
+
   const handleUseMyLocation = () => {
     if (!navigator.geolocation) {
       setLocError('Geolocation not supported by this browser.');
@@ -122,6 +209,7 @@ export default function LaunchConfigForm({
       )}
 
       <div className="grid grid-cols-2 gap-3">
+        <CitySearch onSelect={handleCitySelect} disabled={disabled} />
         <Field
           label="Latitude"
           unit="°"

@@ -9,6 +9,7 @@ import { TrajectoryMap } from './components/TrajectoryMap';
 import { OrientationRender } from './components/OrientationRender';
 import { RocketPanel } from './components/RocketPanel';
 import { HowToModal } from './components/HowToModal';
+import { WeatherPanel } from './components/WeatherPanel';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
 import type { ComparisonResponse } from './types';
@@ -165,6 +166,20 @@ export default function App() {
           <span className="text-gray-700 text-xs hidden sm:inline">OpenRocket → RocketPy</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Units toggle — always visible so weather panel reflects it */}
+          <div className="flex items-center gap-0.5 bg-gray-900 rounded-lg px-2 py-1 border border-gray-800">
+            {(['metric', 'imperial'] as UnitSystem[]).map((u) => (
+              <button
+                key={u}
+                onClick={() => setUnitSystem(u)}
+                className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                  unitSystem === u ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'
+                }`}
+              >
+                {u === 'metric' ? 'Metric' : 'Imperial'}
+              </button>
+            ))}
+          </div>
           {results?.rocket_params && (
             <button
               onClick={() => setPanelOpen(true)}
@@ -226,20 +241,6 @@ export default function App() {
                     {rpy.weather_source === 'standard_atmosphere' ? 'Std Atmosphere' : rpy.weather_source}
                   </span>
                   <div className="flex items-center gap-0.5 bg-gray-900 rounded-lg px-2.5 py-1.5 border border-gray-800">
-                    <span className="text-xs text-gray-500 mr-1.5">Units</span>
-                    {(['metric', 'imperial'] as UnitSystem[]).map((u) => (
-                      <button
-                        key={u}
-                        onClick={() => setUnitSystem(u)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          unitSystem === u ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
-                        }`}
-                      >
-                        {u === 'metric' ? 'Metric' : 'Imperial'}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-0.5 bg-gray-900 rounded-lg px-2.5 py-1.5 border border-gray-800">
                     <span className="text-xs text-gray-500 mr-1.5">Stability</span>
                     {(['cal', 'pct'] as StabilityUnit[]).map((u) => (
                       <button
@@ -299,6 +300,15 @@ export default function App() {
             )}
           </div>
         </div>
+
+        {/* Full-width: weather panel (always shown when lat/lon set) */}
+        <WeatherPanel
+          lat={config.lat}
+          lon={config.lon}
+          elevationM={config.elevation}
+          launchDateTime={config.weatherDateTime}
+          unitSystem={unitSystem}
+        />
 
         {/* Full-width: charts + 3D (only when results) */}
         {appState === 'results' && results && rpy && or_ && (

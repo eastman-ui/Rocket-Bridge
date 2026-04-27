@@ -92,7 +92,7 @@ function rotateToNose(pts: Pt[], nx: number, ny: number, nz: number) {
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export function OrientationRender({ trajectory, burnOutTimeS, apogeeTimeS }: Props) {
+export function OrientationRender({ trajectory }: Props) {
   const hasOri = !!(trajectory.ux && trajectory.ux.length === trajectory.t.length);
   if (!hasOri) return null;
 

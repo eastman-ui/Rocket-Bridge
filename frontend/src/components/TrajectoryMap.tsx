@@ -244,12 +244,12 @@ export function TrajectoryMap({
       .addTo(map);
 
     // ── Drift predictions ──────────────────────────────────────────────────────
+    const driftLatLons: [number, number][] = [];
     if (weatherData && showDrift) {
       const hourly = weatherData.hourly;
       const times = hourly.time as string[];
       const speedToMs = weatherIsImperial ? 0.44704 : (1 / 3.6);
 
-      // Find forecast hours around launch time (or now), every 3h, up to 8
       const pivot = launchDateTime ?? new Date().toISOString().slice(0, 16);
       const pivotMs = new Date(pivot).getTime();
       const driftHours: { idx: number; label: string }[] = [];
@@ -270,6 +270,7 @@ export function TrajectoryMap({
           trajectory, apogeeTimeS, launchLat, launchLon,
           launchElevationM, hourly, idx, speedToMs,
         );
+        driftLatLons.push([pLat, pLon]);
         const color = DRIFT_COLORS[ci % DRIFT_COLORS.length];
         const icon = L.divIcon({
           html: `<div style="width:10px;height:10px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>`,
@@ -280,7 +281,6 @@ export function TrajectoryMap({
         L.marker([pLat, pLon], { icon })
           .bindPopup(`<b>Predicted Landing</b><br>${label}<br>Lat: ${pLat.toFixed(5)}<br>Lon: ${pLon.toFixed(5)}`)
           .addTo(driftGroup);
-        // Label above marker
         L.marker([pLat, pLon], {
           icon: L.divIcon({
             html: `<div style="font-size:10px;color:${color};font-weight:600;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000">${label}</div>`,
@@ -294,8 +294,9 @@ export function TrajectoryMap({
       });
     }
 
-    // Fit map to trajectory bounds
+    // Fit map to trajectory + all drift prediction bounds
     const bounds = L.latLngBounds(latLons);
+    driftLatLons.forEach(ll => bounds.extend(ll));
     map.fitBounds(bounds, { padding: [40, 40] });
 
     return () => {

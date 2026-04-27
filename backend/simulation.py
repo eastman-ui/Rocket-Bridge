@@ -241,24 +241,51 @@ def run_rocketpy(
     # ------------------------------------------------------------------
     rocket_diagram = None
     try:
-        import io
-        import base64
-        import matplotlib.pyplot as plt
-        with plt.style.context('dark_background'):
+        import io as _io
+        import base64 as _b64
+        import matplotlib as _mpl
+        import matplotlib.pyplot as _plt
+
+        _plt.close('all')  # clear any stale figures before draw
+
+        with _plt.style.context('dark_background'):
             draw_result = rocket.draw()
-            fig = draw_result[0] if isinstance(draw_result, (tuple, list)) else draw_result.figure
-            fig.patch.set_facecolor('#111827')
-            for ax in (fig.get_axes() or []):
-                ax.set_facecolor('#1f2937')
-                for spine in ax.spines.values():
-                    spine.set_edgecolor('#374151')
-            buf = io.BytesIO()
-            fig.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#111827')
-            buf.seek(0)
-            rocket_diagram = base64.b64encode(buf.read()).decode('utf-8')
-            plt.close(fig)
+
+        # Resolve fig regardless of what rocket.draw() returns:
+        # - (fig, axes) tuple  → draw_result[0]
+        # - Figure directly    → draw_result
+        # - None / unknown     → most recently created figure via plt.gcf()
+        if isinstance(draw_result, (list, tuple)) and draw_result:
+            fig = draw_result[0]
+        elif isinstance(draw_result, _mpl.figure.Figure):
+            fig = draw_result
+        else:
+            nums = _plt.get_fignums()
+            if not nums:
+                raise RuntimeError("rocket.draw() created no figure")
+            fig = _plt.figure(nums[-1])
+
+        logger.info("rocket.draw() succeeded, fig type=%s axes=%d",
+                    type(fig).__name__, len(fig.get_axes()))
+
+        fig.patch.set_facecolor('#111827')
+        for ax in fig.get_axes():
+            ax.set_facecolor('#1f2937')
+            for spine in ax.spines.values():
+                spine.set_edgecolor('#374151')
+            ax.tick_params(colors='#9ca3af')
+            ax.xaxis.label.set_color('#9ca3af')
+            ax.yaxis.label.set_color('#9ca3af')
+            ax.title.set_color('#e5e7eb')
+
+        buf = _io.BytesIO()
+        fig.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='#111827')
+        buf.seek(0)
+        rocket_diagram = _b64.b64encode(buf.read()).decode('utf-8')
+        logger.info("rocket_diagram encoded, length=%d bytes", len(rocket_diagram))
+        _plt.close(fig)
     except Exception as exc:
-        logger.warning("rocket.draw() failed: %s", exc)
+        logger.warning("rocket.draw() failed: %s", exc, exc_info=True)
 
     # ------------------------------------------------------------------
     # 4. Flight

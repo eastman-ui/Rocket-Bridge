@@ -258,6 +258,18 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Rocket diagram */}
+                {results.rocket_diagram && (
+                  <div className="bg-gray-900 rounded-xl p-3">
+                    <p className="text-xs text-gray-600 uppercase tracking-wide font-medium mb-2">Rocket Profile</p>
+                    <img
+                      src={`data:image/png;base64,${results.rocket_diagram}`}
+                      alt="Rocket cross-section diagram"
+                      className="w-full rounded"
+                    />
+                  </div>
+                )}
+
                 {/* Quick stats: 2×2 grid */}
                 <div className="grid grid-cols-2 gap-2">
                   <QuickStat

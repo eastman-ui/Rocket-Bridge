@@ -42,6 +42,9 @@ class RocketPyResults(BaseModel):
     weather_source: str = "standard_atmosphere"
     timeseries: TimeSeriesData
     trajectory_3d: Trajectory3D
+    launch_lat: float = 0.0
+    launch_lon: float = 0.0
+    launch_elevation_m: float = 0.0
 
 class RocketParams(BaseModel):
     motor_designation: str = ""
@@ -58,5 +61,6 @@ class ComparisonResponse(BaseModel):
     or_results: ORResults
     rocketpy_results: RocketPyResults
     kml_available: bool = False
+    kml_data: Optional[str] = None  # KML file contents for download / map display
     rocket_params: Optional[RocketParams] = None
     rocket_diagram: Optional[str] = None  # base64-encoded PNG

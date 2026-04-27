@@ -169,7 +169,7 @@ export function OrientationRender({ trajectory, burnOutTimeS, apogeeTimeS }: Pro
     },
     margin: { t: 10, r: 0, b: 110, l: 0 },
     autosize: true,
-    height: 460,
+    height: 520,
     updatemenus: [{
       type: 'buttons',
       showactive: false,
@@ -179,12 +179,12 @@ export function OrientationRender({ trajectory, burnOutTimeS, apogeeTimeS }: Pro
       pad: { r: 8, t: 4 },
       buttons: [
         {
-          label: '▶ Play',
+          label: 'Play',
           method: 'animate',
           args: [null, { fromcurrent: true, frame: { duration: 50, redraw: true }, transition: { duration: 0 } }],
         },
         {
-          label: '⏸',
+          label: 'Pause',
           method: 'animate',
           args: [[null], { mode: 'immediate', frame: { duration: 0, redraw: false } }],
         },
@@ -214,7 +214,7 @@ export function OrientationRender({ trajectory, burnOutTimeS, apogeeTimeS }: Pro
     <div className="bg-gray-900 rounded-xl p-4">
       <h2 className="text-sm font-semibold text-gray-300 mb-0.5 uppercase tracking-wide">Rocket Orientation</h2>
       <p className="text-gray-600 text-xs mb-3">
-        Rocket attitude relative to ENU frame · press ▶ to animate through flight
+        Rocket attitude relative to ENU frame · press Play to animate through flight
       </p>
       <Plot
         data={data}

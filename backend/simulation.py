@@ -368,15 +368,19 @@ def run_rocketpy(
         traj_y = y_src[:, 1]  # North
         traj_z = z_src[:, 1]  # Up
 
-        m = len(traj_t)
-        t_step = max(1, m // 500)
-        t_idx = np.arange(0, m, t_step)
+        # Resample onto a uniform time grid so animation speed matches real time.
+        # The ODE solver uses adaptive steps: dense during ascent, sparse during
+        # parachute descent. Index-based subsampling would over-represent ascent.
+        t_uniform = np.linspace(traj_t[0], traj_t[-1], 500)
+        traj_x_rs = np.interp(t_uniform, traj_t, traj_x)
+        traj_y_rs = np.interp(t_uniform, traj_t, traj_y)
+        traj_z_rs = np.interp(t_uniform, traj_t, traj_z)
 
         trajectory_3d = {
-            "t": traj_t[t_idx].tolist(),
-            "x": traj_x[t_idx].tolist(),
-            "y": traj_y[t_idx].tolist(),
-            "z": traj_z[t_idx].tolist(),
+            "t": t_uniform.tolist(),
+            "x": traj_x_rs.tolist(),
+            "y": traj_y_rs.tolist(),
+            "z": traj_z_rs.tolist(),
         }
 
         # Nose orientation — velocity unit vector (nose ≈ direction of travel)
@@ -384,14 +388,14 @@ def run_rocketpy(
             vx_src = np.asarray(flight.vx.source)
             vy_src = np.asarray(flight.vy.source)
             vz_src = np.asarray(flight.vz.source)
-            vx_v = np.interp(traj_t, vx_src[:, 0], vx_src[:, 1])
-            vy_v = np.interp(traj_t, vy_src[:, 0], vy_src[:, 1])
-            vz_v = np.interp(traj_t, vz_src[:, 0], vz_src[:, 1])
+            vx_v = np.interp(t_uniform, vx_src[:, 0], vx_src[:, 1])
+            vy_v = np.interp(t_uniform, vy_src[:, 0], vy_src[:, 1])
+            vz_v = np.interp(t_uniform, vz_src[:, 0], vz_src[:, 1])
             spd = np.sqrt(vx_v**2 + vy_v**2 + vz_v**2)
             spd = np.where(spd < 1e-6, 1.0, spd)
-            trajectory_3d["ux"] = (vx_v[t_idx] / spd[t_idx]).tolist()
-            trajectory_3d["uy"] = (vy_v[t_idx] / spd[t_idx]).tolist()
-            trajectory_3d["uz"] = (vz_v[t_idx] / spd[t_idx]).tolist()
+            trajectory_3d["ux"] = (vx_v / spd).tolist()
+            trajectory_3d["uy"] = (vy_v / spd).tolist()
+            trajectory_3d["uz"] = (vz_v / spd).tolist()
         except Exception as exc2:
             logger.warning("Could not extract orientation vectors: %s", exc2)
             trajectory_3d["ux"] = []
@@ -434,4 +438,7 @@ def run_rocketpy(
         "trajectory_3d": trajectory_3d,
         "weather_source": weather_source,
         "rocket_diagram": rocket_diagram,
+        "launch_lat": lat,
+        "launch_lon": lon,
+        "launch_elevation_m": elevation,
     }

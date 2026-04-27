@@ -91,11 +91,6 @@ export function TrajectoryPlot({
     : `${Math.round(apogeeAgl).toLocaleString()} m`;
 
   const layout: any = {
-    title: {
-      text: `3D Flight Trajectory — Apogee ${apogeeDisplay} AGL`,
-      font: { color: '#e2e8f0', size: 14 },
-      y: 0.99,
-    },
     paper_bgcolor: '#111827',
     scene: {
       xaxis: { title: { text: `East (${altUnit})`, font: { color: '#d1d5db', size: 12 } }, gridcolor: '#374151', backgroundcolor: '#1f2937', color: '#9ca3af', tickfont: { size: 10 } },
@@ -109,9 +104,9 @@ export function TrajectoryPlot({
       bgcolor: 'rgba(0,0,0,0)',
       x: 0, y: 1,
     },
-    margin: { t: 30, r: 0, b: 110, l: 0 },
+    margin: { t: 10, r: 0, b: 110, l: 0 },
     autosize: true,
-    height: 560,
+    height: 520,
     updatemenus: [{
       type: 'buttons',
       showactive: false,
@@ -123,7 +118,7 @@ export function TrajectoryPlot({
       pad: { r: 8, t: 4 },
       buttons: [
         {
-          label: '▶ Play',
+          label: 'Play',
           method: 'animate',
           args: [null, {
             fromcurrent: true,
@@ -132,7 +127,7 @@ export function TrajectoryPlot({
           }],
         },
         {
-          label: '⏸',
+          label: 'Pause',
           method: 'animate',
           args: [[null], { mode: 'immediate', frame: { duration: 0, redraw: false } }],
         },
@@ -170,7 +165,7 @@ export function TrajectoryPlot({
     <div className="bg-gray-900 rounded-xl p-4">
       <h2 className="text-sm font-semibold text-gray-300 mb-0.5 uppercase tracking-wide">3D Flight Trajectory</h2>
       <p className="text-gray-600 text-xs mb-3">
-        East/North from launch · altitude {altUnit} · press ▶ to animate
+        Apogee {apogeeDisplay} AGL · altitude {altUnit} · press Play to animate
       </p>
       <Plot
         data={data}

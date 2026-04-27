@@ -42,6 +42,9 @@ export interface RocketPyResults {
   weather_source: string;
   timeseries: TimeSeriesData;
   trajectory_3d: Trajectory3D;
+  launch_lat: number;
+  launch_lon: number;
+  launch_elevation_m: number;
 }
 
 export interface RocketParams {
@@ -60,6 +63,7 @@ export interface ComparisonResponse {
   or_results: ORResults;
   rocketpy_results: RocketPyResults;
   kml_available: boolean;
+  kml_data?: string;
   rocket_params?: RocketParams;
   rocket_diagram?: string;
 }

@@ -1,21 +1,25 @@
 import { useState } from 'react';
+import type { UnitSystem } from './TimeSeriesCharts';
 
 export interface LaunchConfig {
   lat: number;
   lon: number;
-  elevation: number;
-  railLength: number;
+  elevation: number;   // always stored in meters
+  railLength: number;  // always stored in meters
   inclination: number;
   heading: number;
   useLiveWeather: boolean;
-  weatherDateTime: string; // ISO local datetime string, e.g. "2025-08-01T14:00"
+  weatherDateTime: string;
 }
 
 interface LaunchConfigProps {
   config: LaunchConfig;
   onChange: (config: LaunchConfig) => void;
   disabled: boolean;
+  unitSystem: UnitSystem;
 }
+
+const M_FT = 3.28084;
 
 function Field({
   label,
@@ -26,6 +30,7 @@ function Field({
   onChange,
   disabled,
   step,
+  scale = 1,
 }: {
   label: string;
   unit?: string;
@@ -35,7 +40,9 @@ function Field({
   onChange: (config: LaunchConfig) => void;
   disabled: boolean;
   step?: number;
+  scale?: number; // multiply stored value for display; divide input to store
 }) {
+  const displayValue = parseFloat((value * scale).toFixed(scale === 1 ? 3 : 1));
   return (
     <div className="flex flex-col gap-1">
       <label className="text-sm text-gray-400">
@@ -44,11 +51,11 @@ function Field({
       </label>
       <input
         type="number"
-        value={value}
+        value={displayValue}
         step={step ?? 1}
         disabled={disabled}
         onChange={(e) =>
-          onChange({ ...config, [field]: parseFloat(e.target.value) })
+          onChange({ ...config, [field]: parseFloat(e.target.value) / scale })
         }
         className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
       />
@@ -60,9 +67,11 @@ export default function LaunchConfigForm({
   config,
   onChange,
   disabled,
+  unitSystem,
 }: LaunchConfigProps) {
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState<string | null>(null);
+  const imp = unitSystem === 'imperial';
 
   const handleUseMyLocation = () => {
     if (!navigator.geolocation) {
@@ -105,7 +114,7 @@ export default function LaunchConfigForm({
           disabled={disabled || locating}
           className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
-          {locating ? '⏳ Locating…' : '📍 Use my location'}
+          {locating ? 'Locating...' : 'Use my location'}
         </button>
       </div>
       {locError && (
@@ -135,23 +144,25 @@ export default function LaunchConfigForm({
         />
         <Field
           label="Elevation"
-          unit="m"
+          unit={imp ? 'ft' : 'm'}
           value={config.elevation}
           field="elevation"
           config={config}
           onChange={onChange}
           disabled={disabled}
-          step={1}
+          step={imp ? 10 : 1}
+          scale={imp ? M_FT : 1}
         />
         <Field
           label="Rail Length"
-          unit="m"
+          unit={imp ? 'ft' : 'm'}
           value={config.railLength}
           field="railLength"
           config={config}
           onChange={onChange}
           disabled={disabled}
-          step={0.1}
+          step={imp ? 0.5 : 0.1}
+          scale={imp ? M_FT : 1}
         />
         <Field
           label="Inclination"

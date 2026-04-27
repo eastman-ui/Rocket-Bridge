@@ -5,8 +5,10 @@ import LaunchConfigForm from './components/LaunchConfig';
 import { ComparisonTable } from './components/ComparisonTable';
 import { TimeSeriesCharts } from './components/TimeSeriesCharts';
 import { TrajectoryPlot } from './components/TrajectoryPlot';
+import { TrajectoryMap } from './components/TrajectoryMap';
 import { OrientationRender } from './components/OrientationRender';
 import { RocketPanel } from './components/RocketPanel';
+import { HowToModal } from './components/HowToModal';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
 import type { ComparisonResponse } from './types';
@@ -112,6 +114,7 @@ export default function App() {
   const [unitSystem, setUnitSystem] = useState<UnitSystem>('metric');
   const [stabilityUnit, setStabilityUnit] = useState<StabilityUnit>('cal');
   const [panelOpen, setPanelOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const handleSimulate = async () => {
     if (!selectedFile) return;
@@ -161,17 +164,28 @@ export default function App() {
           <h1 className="text-base font-bold tracking-tight">RocketBridge</h1>
           <span className="text-gray-700 text-xs hidden sm:inline">OpenRocket → RocketPy</span>
         </div>
-        {results?.rocket_params && (
+        <div className="flex items-center gap-2">
+          {results?.rocket_params && (
+            <button
+              onClick={() => setPanelOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 110 20A10 10 0 0112 2z" />
+              </svg>
+              Rocket Details
+            </button>
+          )}
           <button
-            onClick={() => setPanelOpen(true)}
-            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+            onClick={() => setHelpOpen(true)}
+            title="How to use RocketBridge"
+            className="flex items-center justify-center w-7 h-7 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 110 20A10 10 0 0112 2z" />
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            Rocket Details
           </button>
-        )}
+        </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1">
@@ -189,6 +203,7 @@ export default function App() {
               config={config}
               onChange={setConfig}
               disabled={isSimulating}
+              unitSystem={unitSystem}
             />
             <button
               onClick={handleSimulate}
@@ -295,17 +310,28 @@ export default function App() {
               unitSystem={unitSystem}
               stabilityUnit={stabilityUnit}
             />
-            <TrajectoryPlot
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <TrajectoryPlot
+                trajectory={rpy.trajectory_3d}
+                apogeeAgl={rpy.apogee_m_agl}
+                apogeeTimeS={rpy.apogee_time_s}
+                burnOutTimeS={rpy.burn_out_time_s}
+                unitSystem={unitSystem}
+              />
+              <OrientationRender
+                trajectory={rpy.trajectory_3d}
+                burnOutTimeS={rpy.burn_out_time_s}
+                apogeeTimeS={rpy.apogee_time_s}
+              />
+            </div>
+            <TrajectoryMap
               trajectory={rpy.trajectory_3d}
-              apogeeAgl={rpy.apogee_m_agl}
+              launchLat={rpy.launch_lat}
+              launchLon={rpy.launch_lon}
+              launchElevationM={rpy.launch_elevation_m}
               apogeeTimeS={rpy.apogee_time_s}
               burnOutTimeS={rpy.burn_out_time_s}
-              unitSystem={unitSystem}
-            />
-            <OrientationRender
-              trajectory={rpy.trajectory_3d}
-              burnOutTimeS={rpy.burn_out_time_s}
-              apogeeTimeS={rpy.apogee_time_s}
+              kmlData={results.kml_data}
             />
           </>
         )}
@@ -321,6 +347,7 @@ export default function App() {
           onClose={() => setPanelOpen(false)}
         />
       )}
+      <HowToModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

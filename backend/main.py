@@ -170,15 +170,26 @@ async def simulate(
             weather_source=rocketpy_raw["weather_source"],
             timeseries=TimeSeriesData(**rocketpy_raw["timeseries"]),
             trajectory_3d=Trajectory3D(**rocketpy_raw["trajectory_3d"]),
+            launch_lat=rocketpy_raw["launch_lat"],
+            launch_lon=rocketpy_raw["launch_lon"],
+            launch_elevation_m=rocketpy_raw["launch_elevation_m"],
         )
 
-        # Step 6: Check for KML output
-        kml_available = os.path.exists(os.path.join(tmp_dir, "trajectory.kml"))
+        # Step 6: Read KML output before temp dir is deleted
+        kml_path = os.path.join(tmp_dir, "trajectory.kml")
+        kml_data: Optional[str] = None
+        if os.path.exists(kml_path):
+            try:
+                with open(kml_path) as f:
+                    kml_data = f.read()
+            except Exception as e:
+                logger.warning("Could not read KML: %s", e)
 
         return ComparisonResponse(
             or_results=or_results,
             rocketpy_results=rocketpy_results,
-            kml_available=kml_available,
+            kml_available=kml_data is not None,
+            kml_data=kml_data,
             rocket_params=rocket_params,
             rocket_diagram=rocketpy_raw.get("rocket_diagram"),
         )

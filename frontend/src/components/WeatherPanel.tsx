@@ -285,6 +285,14 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
     .map((t, i) => ({ t, i }))
     .filter(({ t }) => t.startsWith(selectedDate));
 
+  // Current local hour in "YYYY-MM-DDTHH:00" format (matches Open-Meteo local timezone)
+  const nowHour = (() => {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); // shift so UTC = local
+    d.setUTCMinutes(0, 0, 0);                             // round to hour
+    return d.toISOString().slice(0, 16);
+  })();
+
   // ─── Launch time summary ──────────────────────────────────────────────────────
   const launchTemp = (hourly.temperature_2m as number[])[hourIdx];
   const launchWind = (hourly.windspeed_10m as number[])[hourIdx];
@@ -430,6 +438,7 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
               {dayHours.map(({ t, i }) => {
                 const isActive = t === activeHour;
                 const isLaunch = t === launchHour;
+                const isNow = t === nowHour;
                 const hr = t.slice(11, 16);
                 const ws = (hourly.windspeed_10m as number[])[i];
                 const wd = (hourly.winddirection_10m as number[])[i];
@@ -443,10 +452,16 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
                     className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[48px] transition-colors ${
                       isActive
                         ? 'bg-blue-600/20 border border-blue-500/40'
+                        : isNow
+                        ? 'bg-green-900/20 border border-green-700/40 hover:bg-green-800/30'
                         : 'bg-gray-800/40 hover:bg-gray-700/60'
                     }`}
                   >
-                    <span className={`text-xs font-medium ${isActive ? 'text-blue-300' : isLaunch ? 'text-gray-400' : 'text-gray-500'}`}>
+                    {isNow
+                      ? <span className="text-green-400 text-[9px] leading-none font-bold tracking-tight">▼ now</span>
+                      : <span className="text-[9px] leading-none opacity-0 select-none">▼</span>
+                    }
+                    <span className={`text-xs font-medium ${isActive ? 'text-blue-300' : isNow ? 'text-green-300' : isLaunch ? 'text-gray-400' : 'text-gray-500'}`}>
                       {hr}{isLaunch && !isActive ? ' *' : ''}
                     </span>
                     <div
@@ -462,7 +477,7 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
             </div>
           </div>
           <p className="text-xs text-gray-700 mt-1">
-            Wind {speedUnit} · cloud % · dot color = wind direction · * = launch time · click any hour to view wind aloft
+            Wind {speedUnit} · cloud % · dot = wind direction · * = launch · ▼ = now · click to view wind aloft
           </p>
         </div>
       )}

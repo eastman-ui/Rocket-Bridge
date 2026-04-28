@@ -88,6 +88,7 @@ def extract_or_results(ork_path: str, jar_path: str) -> dict:
         # Timeseries extraction
         # ------------------------------------------------------------------
         variables = [
+            fdt.TYPE_TIME,
             fdt.TYPE_ALTITUDE,
             fdt.TYPE_VELOCITY_TOTAL,
             fdt.TYPE_MACH_NUMBER,
@@ -98,7 +99,7 @@ def extract_or_results(ork_path: str, jar_path: str) -> dict:
         ]
         data = orh.get_timeseries(sim, variables)
 
-        time_arr = np.asarray(data["time"])
+        time_arr = np.asarray(data[fdt.TYPE_TIME])
         alt_arr = np.asarray(data[fdt.TYPE_ALTITUDE])
         vel_arr = np.asarray(data[fdt.TYPE_VELOCITY_TOTAL])
         mach_arr = np.asarray(data[fdt.TYPE_MACH_NUMBER])

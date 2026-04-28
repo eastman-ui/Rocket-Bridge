@@ -63,6 +63,16 @@ class HourlyLanding(BaseModel):
     lat: float
     lon: float
 
+class FinSetInfo(BaseModel):
+    index: str
+    n: int
+    root_chord: float
+    tip_chord: float
+    span: float
+    sweep_length: float = 0
+    position: float = 0
+    fallback_fields: list[str] = []
+
 class ComparisonResponse(BaseModel):
     or_results: ORResults
     rocketpy_results: RocketPyResults
@@ -70,5 +80,7 @@ class ComparisonResponse(BaseModel):
     kml_data: Optional[str] = None
     rocket_params: Optional[RocketParams] = None
     rocket_diagram: Optional[str] = None
+    fin_comparison_diagram: Optional[str] = None
+    fin_sets: list[FinSetInfo] = []
     hourly_landings: list[HourlyLanding] = []
     warnings: list[str] = []

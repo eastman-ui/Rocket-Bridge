@@ -533,6 +533,7 @@ def _inject_freeform_fins(ork_path: str, params: dict) -> None:
                 "span": round(span, 6),
                 "position": round(position or 0.0, 6),
                 "sweep_length": round(sweep_length, 6),
+                "freeform_points": list(zip(xs, ys)),
             }
 
         if trapezoidal_fins:

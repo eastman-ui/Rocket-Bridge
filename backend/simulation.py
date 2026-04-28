@@ -205,6 +205,73 @@ def _draw_rocket_profile(rkt_params: dict, nc_list: list, fin_list: list,
         return None
 
 
+def _draw_fin_comparison(fin_list: list) -> Optional[str]:
+    """Draw freeform vs trapezoidal fin comparison. Returns base64 PNG or None."""
+    import io as _io
+    import base64 as _b64
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon as MplPolygon
+
+    fins_with_points = [f for f in fin_list if f.get("freeform_points")]
+    if not fins_with_points:
+        return None
+
+    M_IN = 39.3701
+    n_fins = min(len(fins_with_points), 3)
+
+    try:
+        fig, axes = plt.subplots(1, n_fins, figsize=(4 * n_fins, 3.5), dpi=150)
+        fig.patch.set_facecolor("#0f1117")
+        if n_fins == 1:
+            axes = [axes]
+
+        for idx, fin in enumerate(fins_with_points[:n_fins]):
+            ax = axes[idx]
+            ax.set_facecolor("#0f1117")
+
+            pts = fin["freeform_points"]
+            xs_free = [p[0] * M_IN for p in pts] + [pts[0][0] * M_IN]
+            ys_free = [p[1] * M_IN for p in pts] + [pts[0][1] * M_IN]
+
+            rc = fin.get("root_chord", 0.1) * M_IN
+            tc = fin.get("tip_chord", 0.05) * M_IN
+            sp = fin.get("span", 0.05) * M_IN
+            sw = fin.get("sweep_length", 0) * M_IN
+
+            # Trapezoidal vertices: (x, y) — root LE, root TE, tip TE, tip LE
+            trap_x = [0, rc, sw + tc, sw, 0]
+            trap_y = [0, 0, sp, sp, 0]
+
+            ax.fill(xs_free, ys_free, facecolor="#3b82f6", alpha=0.35, edgecolor="#3b82f6",
+                    linewidth=1.5, label="Original (freeform)")
+            ax.plot(trap_x, trap_y, color="#f97316", linewidth=2, linestyle="--",
+                    label="Approximation (trapezoidal)")
+
+            ax.set_aspect("equal", adjustable="datalim")
+            ax.set_xlabel("Axial (in)", color="#6b7280", fontsize=7)
+            ax.set_ylabel("Radial (in)", color="#6b7280", fontsize=7)
+            ax.tick_params(colors="#6b7280", labelsize=6)
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#374151")
+            ax.legend(fontsize=7, loc="upper right", facecolor="#1f2937",
+                      edgecolor="#374151", labelcolor="#d1d5db")
+            ax.set_title(f"Fin Set {idx + 1}", color="#9ca3af", fontsize=8, pad=4)
+
+        fig.suptitle("Fin Shape Comparison", color="#d1d5db", fontsize=10, y=0.98)
+        fig.tight_layout(rect=[0, 0, 1, 0.94])
+
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#0f1117")
+        buf.seek(0)
+        result = _b64.b64encode(buf.read()).decode("utf-8")
+        plt.close(fig)
+        return result
+
+    except Exception as exc:
+        logger.warning("_draw_fin_comparison failed: %s", exc, exc_info=True)
+        return None
+
+
 def _compute_hourly_landings(
     env: "Environment",
     lat: float, lon: float,
@@ -389,7 +456,6 @@ def run_rocketpy(
     # and grain volume), then serializer value, then APCP fallback.
     _grain_density = float(motor_params.get("grain_density", 0) or 0)
     if _grain_density <= 0:
-        import math
         _grain_volume = math.pi * (_grain_or ** 2 - _grain_ir ** 2) * _grain_h * _grain_number
         _prop_mass = float(motor_params.get("propellant_mass", 0) or 0)
         if _prop_mass > 0 and _grain_volume > 0:
@@ -584,6 +650,8 @@ def run_rocketpy(
         motor_params=motor_params,
         rocket_obj=rocket,
     )
+
+    fin_comparison_diagram = _draw_fin_comparison(fin_list)
 
     # ------------------------------------------------------------------
     # 4. Flight
@@ -817,6 +885,7 @@ def run_rocketpy(
         "trajectory_3d": trajectory_3d,
         "weather_source": weather_source,
         "rocket_diagram": rocket_diagram,
+        "fin_comparison_diagram": fin_comparison_diagram,
         "launch_lat": lat,
         "launch_lon": lon,
         "launch_elevation_m": elevation,

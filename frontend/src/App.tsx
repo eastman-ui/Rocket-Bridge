@@ -13,7 +13,7 @@ import { ToolsPage } from './pages/ToolsPage';
 import type { WeatherData } from './components/WeatherPanel';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
-import type { ComparisonResponse } from './types';
+import type { ComparisonResponse, FinSetInfo } from './types';
 
 type ActivePage = 'main' | 'tools';
 
@@ -143,6 +143,8 @@ export default function App() {
   const [cacheMeta, setCacheMeta] = useState<CacheMeta | null>(null);
   const [resultsStale, setResultsStale] = useState(false);
   const [activePage, setActivePage] = useState<ActivePage>('main');
+  const [finEdits, setFinEdits] = useState<Record<string, Partial<FinSetInfo>>>({});
+  const [resimulating, setResimulating] = useState(false);
 
   useEffect(() => {
     const entry = loadCache();
@@ -226,6 +228,68 @@ export default function App() {
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
       setAppState('error');
+    }
+  };
+
+  const handleResimulateWithOverrides = async () => {
+    if (!selectedFile || !results?.fin_sets?.length) return;
+    setResimulating(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      const overrides: Record<string, Record<string, number>> = {};
+      for (const [idx, ed] of Object.entries(finEdits)) {
+        if (Object.keys(ed).length > 0) {
+          overrides[idx] = {};
+          for (const [k, v] of Object.entries(ed)) {
+            if (k in { root_chord: 1, tip_chord: 1, span: 1, sweep_length: 1 } && typeof v === 'number') {
+              overrides[idx][k] = v;
+            }
+          }
+        }
+      }
+      const params = new URLSearchParams({
+        lat: config.lat.toString(),
+        lon: config.lon.toString(),
+        elevation: config.elevation.toString(),
+        rail_length: config.railLength.toString(),
+        inclination: config.inclination.toString(),
+        heading: config.heading.toString(),
+        use_live_weather: config.useLiveWeather.toString(),
+        ...(config.useLiveWeather && config.weatherDateTime ? { sim_datetime: config.weatherDateTime } : {}),
+        ...(Object.keys(overrides).length > 0 ? { fin_overrides: JSON.stringify(overrides) } : {}),
+      });
+      const response = await fetch(`/api/simulate?${params}`, { method: 'POST', body: formData });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail ?? response.statusText);
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          for (const line of part.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const d = JSON.parse(line.slice(6));
+              if (d.type === 'done' && d.result) {
+                setResults(d.result);
+                setAppState('results');
+                saveCache(d.result, config, selectedFile.name);
+                setFinEdits({});
+              }
+            } catch { /* skip */ }
+          }
+        }
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+      setAppState('error');
+    } finally {
+      setResimulating(false);
     }
   };
 
@@ -366,11 +430,55 @@ export default function App() {
 
                 {/* Unsupported config warnings */}
                 {results.warnings && results.warnings.length > 0 && (
-                  <div className="bg-yellow-950 border border-yellow-700 rounded-xl p-3 space-y-1">
+                  <div className="bg-yellow-950 border border-yellow-700 rounded-xl p-3 space-y-2">
                     <p className="text-xs text-yellow-400 uppercase tracking-wide font-semibold">Configuration Warnings</p>
                     {results.warnings.map((w, i) => (
                       <p key={i} className="text-xs text-yellow-300">{w}</p>
                     ))}
+                    {/* Fin override inputs when fallback values or freeform approximation detected */}
+                    {results.fin_sets?.filter(fs => fs.fallback_fields.length > 0 || results.fin_comparison_diagram).map(fs => (
+                      <details key={fs.index} open className="mt-2">
+                        <summary className="text-xs text-yellow-400 cursor-pointer font-medium">
+                          Fin Set {parseInt(fs.index) + 1} — edit corrected values
+                        </summary>
+                        <div className="grid grid-cols-2 gap-2 mt-2">
+                          {([
+                            ['root_chord', 'Root Chord (m)'],
+                            ['tip_chord', 'Tip Chord (m)'],
+                            ['span', 'Span (m)'],
+                            ['sweep_length', 'Sweep (m)'],
+                          ] as const).map(([field, label]) => (
+                            <label key={field} className="flex flex-col gap-0.5">
+                              <span className="text-[10px] text-gray-500">{label}
+                                {fs.fallback_fields.includes(field) &&
+                                  <span className="text-yellow-500 ml-1">(fallback)</span>}
+                              </span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={finEdits[fs.index]?.[field as keyof FinSetInfo] ?? (fs as any)[field]}
+                                onChange={e => setFinEdits(prev => ({
+                                  ...prev,
+                                  [fs.index]: { ...prev[fs.index], [field]: parseFloat(e.target.value) || 0 },
+                                }))}
+                                className={`bg-gray-900 border rounded px-2 py-1 text-xs text-gray-200 w-full ${
+                                  fs.fallback_fields.includes(field) ? 'border-yellow-600' : 'border-gray-700'
+                                }`}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </details>
+                    ))}
+                    {(results.fin_sets?.some(fs => fs.fallback_fields.length > 0) || results.fin_comparison_diagram) && (
+                      <button
+                        onClick={handleResimulateWithOverrides}
+                        disabled={resimulating}
+                        className="mt-2 bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed text-xs text-white font-medium px-3 py-1.5 rounded-lg transition-colors"
+                      >
+                        {resimulating ? 'Re-running…' : 'Re-run with corrected fin values'}
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -381,6 +489,18 @@ export default function App() {
                     <img
                       src={`data:image/png;base64,${results.rocket_diagram}`}
                       alt="Rocket cross-section diagram"
+                      className="w-full rounded"
+                    />
+                  </div>
+                )}
+
+                {/* Fin comparison diagram */}
+                {results.fin_comparison_diagram && (
+                  <div className="bg-gray-900 rounded-xl p-3">
+                    <p className="text-xs text-gray-600 uppercase tracking-wide font-medium mb-2">Fin Shape Comparison</p>
+                    <img
+                      src={`data:image/png;base64,${results.fin_comparison_diagram}`}
+                      alt="Freeform vs trapezoidal fin comparison"
                       className="w-full rounded"
                     />
                   </div>

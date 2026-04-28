@@ -19,7 +19,7 @@ from simulation import run_rocketpy
 from sweep import run_sweep
 from motor_compare import compare_motors, search_motors
 from monte_carlo import run_monte_carlo
-from models import ComparisonResponse, HourlyLanding, ORResults, RocketParams, RocketPyResults, TimeSeriesData, Trajectory3D
+from models import ComparisonResponse, FinSetInfo, HourlyLanding, ORResults, RocketParams, RocketPyResults, TimeSeriesData, Trajectory3D
 
 OR_JAR_PATH = os.getenv("OR_JAR_PATH", "./OpenRocket-23.09.jar")
 
@@ -139,6 +139,7 @@ def _build_response(
     rocketpy_raw: dict,
     rocket_params: RocketParams,
     ork_warnings: list[str],
+    fin_sets: list[FinSetInfo] = [],
 ) -> ComparisonResponse:
     ts_raw = or_results_raw.get("timeseries")
     timeseries_or = TimeSeriesData(**ts_raw) if ts_raw is not None else None
@@ -181,6 +182,8 @@ def _build_response(
         kml_data=rocketpy_raw.get("kml_data"),
         rocket_params=rocket_params,
         rocket_diagram=rocketpy_raw.get("rocket_diagram"),
+        fin_comparison_diagram=rocketpy_raw.get("fin_comparison_diagram"),
+        fin_sets=fin_sets,
         hourly_landings=[HourlyLanding(**h) for h in rocketpy_raw.get("hourly_landings", [])],
         warnings=ork_warnings,
     )
@@ -197,6 +200,7 @@ async def simulate(
     heading: float = Query(0.0),
     use_live_weather: bool = Query(False),
     sim_datetime: Optional[str] = Query(None),
+    fin_overrides: Optional[str] = Query(None),
 ):
     if not file.filename or not file.filename.endswith(".ork"):
         raise HTTPException(status_code=400, detail="File must be .ork")
@@ -232,6 +236,46 @@ async def simulate(
             # Add converter fallback warnings to OR validation warnings
             for fw in params.pop("_fallback_warnings", []):
                 ork_warnings.append(fw)
+
+            # Apply fin overrides if provided
+            if fin_overrides:
+                try:
+                    overrides = json.loads(fin_overrides)
+                    fins = params.get("trapezoidal_fins", {})
+                    if isinstance(fins, dict):
+                        for idx, vals in overrides.items():
+                            if idx in fins and isinstance(vals, dict):
+                                for k, v in vals.items():
+                                    if k in ("root_chord", "tip_chord", "span", "sweep_length", "position"):
+                                        fins[idx][k] = float(v)
+                except Exception as e:
+                    logger.warning("fin_overrides parse error: %s", e)
+
+            # Build fin set metadata for frontend
+            fin_sets: list[FinSetInfo] = []
+            _fins_raw = params.get("trapezoidal_fins", {})
+            _fin_items = list(_fins_raw.items()) if isinstance(_fins_raw, dict) else [(str(i), f) for i, f in enumerate(_fins_raw)]
+            for idx, f in _fin_items:
+                fb = []
+                if float(f.get("root_chord", 0) or 0) == 0.1:
+                    fb.append("root_chord")
+                if float(f.get("tip_chord", 0) or 0) == 0.05:
+                    fb.append("tip_chord")
+                if float(f.get("span", 0) or 0) == 0.05:
+                    fb.append("span")
+                if int(f.get("n", f.get("number", 3)) or 3) == 3:
+                    fb.append("n")
+                fin_sets.append(FinSetInfo(
+                    index=str(idx),
+                    n=int(f.get("n", f.get("number", f.get("fin_count", f.get("count", 3)))) or 3),
+                    root_chord=float(f.get("root_chord", 0) or 0),
+                    tip_chord=float(f.get("tip_chord", 0) or 0),
+                    span=float(f.get("span", 0) or 0),
+                    sweep_length=float(f.get("sweep_length", 0) or 0),
+                    position=float(f.get("position", 0) or 0),
+                    fallback_fields=fb,
+                ))
+
             rocket_params = RocketParams(**_extract_rocket_params(params))
 
             # Run OR extraction and RocketPy in parallel
@@ -290,7 +334,7 @@ async def simulate(
                     f"OpenRocket live extraction failed — showing stored results only "
                     f"(no timeseries). Reason: {or_fallback_reason[0]}"
                 )
-            response = _build_response(or_results_raw, rocketpy_raw, rocket_params, ork_warnings)
+            response = _build_response(or_results_raw, rocketpy_raw, rocket_params, ork_warnings, fin_sets)
             result_dict = response.model_dump()
             _cache_put(cache_key, result_dict)
 

@@ -66,6 +66,17 @@ export interface HourlyLanding {
   lon: number;
 }
 
+export interface FinSetInfo {
+  index: string;
+  n: number;
+  root_chord: number;
+  tip_chord: number;
+  span: number;
+  sweep_length: number;
+  position: number;
+  fallback_fields: string[];
+}
+
 export interface ComparisonResponse {
   or_results: ORResults;
   rocketpy_results: RocketPyResults;
@@ -73,6 +84,8 @@ export interface ComparisonResponse {
   kml_data?: string;
   rocket_params?: RocketParams;
   rocket_diagram?: string;
+  fin_comparison_diagram?: string;
+  fin_sets?: FinSetInfo[];
   hourly_landings?: HourlyLanding[];
   warnings?: string[];
 }

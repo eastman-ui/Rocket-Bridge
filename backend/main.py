@@ -211,11 +211,15 @@ async def simulate(
             # Run OR extraction and RocketPy in parallel
             yield _sse("simulating", 45)
 
+            or_fallback_reason: list[str] = []  # mutable so inner func can write
+
             async def _run_or() -> dict:
                 try:
                     return await asyncio.to_thread(extract_or_results, ork_path, OR_JAR_PATH)
                 except Exception as e:
-                    logger.warning("extract_or_results failed (%s); falling back to stored results.", e)
+                    msg = str(e)
+                    logger.warning("extract_or_results failed (%s); falling back to stored results.", msg)
+                    or_fallback_reason.append(msg)
                     stored = get_stored_results(params)
                     return extract_or_results_from_stored(stored)
 
@@ -255,6 +259,11 @@ async def simulate(
 
             # Build and cache response
             yield _sse("building", 95)
+            if or_fallback_reason:
+                ork_warnings.append(
+                    f"OpenRocket live extraction failed — showing stored results only "
+                    f"(no timeseries). Reason: {or_fallback_reason[0]}"
+                )
             response = _build_response(or_results_raw, rocketpy_raw, rocket_params, ork_warnings)
             result_dict = response.model_dump()
             _cache_put(cache_key, result_dict)

@@ -2,7 +2,7 @@ import logging
 import math
 import os
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -206,28 +206,31 @@ def _draw_rocket_profile(rkt_params: dict, nc_list: list, fin_list: list,
 
 
 def _compute_hourly_landings(
-    lat: float, lon: float, elevation: float,
+    env: "Environment",
+    lat: float, lon: float,
     apogee_lat: float, apogee_lon: float,
     traj_t: np.ndarray, traj_z: np.ndarray,
     apogee_time_s: float,
     sim_datetime: Optional[str],
 ) -> list:
     """
-    Fetch GFS wind via RocketPy Environment for each 3-hour slot from sim_time
-    to end of UTC day, integrate the descent, return predicted landing positions.
+    Predict landing positions for each GFS forecast hour by reusing the
+    already-loaded Environment.  env.set_date() swaps the wind profile
+    to each forecast hour without a new NOMADS download, so there are no
+    extra netCDF4/HDF5 calls and no thread-safety issues.
     """
     if sim_datetime:
         base_dt = datetime.fromisoformat(sim_datetime).replace(tzinfo=timezone.utc)
     else:
         base_dt = datetime.now(tz=timezone.utc)
 
-    # 3-hour GFS slots: current slot through 00Z next day
-    first_hour = (base_dt.hour // 3) * 3
+    # Hourly slots from the current hour through 00Z next day
+    start_hour = base_dt.replace(minute=0, second=0, microsecond=0)
     end_dt = base_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    slots, cur = [], base_dt.replace(hour=first_hour, minute=0, second=0, microsecond=0)
+    slots, cur = [], start_hour
     while cur <= end_dt:
         slots.append(cur)
-        cur += timedelta(hours=3)
+        cur += timedelta(hours=1)
 
     if not slots:
         return []
@@ -241,14 +244,10 @@ def _compute_hourly_landings(
         desc_t = desc_t[::step]
         desc_z = desc_z[::step]
 
-    def _predict(slot_dt: datetime):
+    results = []
+    for slot_dt in slots:
         try:
-            slot_env = Environment(latitude=lat, longitude=lon, elevation=elevation)
-            slot_env.set_date((slot_dt.year, slot_dt.month, slot_dt.day, slot_dt.hour))
-            import concurrent.futures as _cf
-            with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
-                _fut = _ex.submit(slot_env.set_atmospheric_model, type="Forecast", file="GFS")
-                _fut.result(timeout=30)
+            env.set_date((slot_dt.year, slot_dt.month, slot_dt.day, slot_dt.hour))
 
             p_lat, p_lon = apogee_lat, apogee_lon
             for i in range(len(desc_t) - 1):
@@ -257,25 +256,20 @@ def _compute_hourly_landings(
                 if dt_step <= 0:
                     continue
                 try:
-                    u = float(slot_env.wind_velocity_x(alt_asl))
-                    v = float(slot_env.wind_velocity_y(alt_asl))
+                    u = float(env.wind_velocity_x(alt_asl))
+                    v = float(env.wind_velocity_y(alt_asl))
                 except Exception:
                     u = v = 0.0
                 p_lat += v * dt_step / 111111.0
                 p_lon += u * dt_step / (111111.0 * math.cos(math.radians(p_lat)))
 
-            return {"hour": slot_dt.strftime("%Y-%m-%dT%H:00"), "lat": round(p_lat, 6), "lon": round(p_lon, 6)}
+            results.append({
+                "hour": slot_dt.strftime("%Y-%m-%dT%H:00"),
+                "lat": round(p_lat, 6),
+                "lon": round(p_lon, 6),
+            })
         except Exception as exc:
-            logger.warning("hourly_landing %sZ failed: %s", slot_dt.strftime("%H"), exc)
-            return None
-
-    results = []
-    # netCDF4/HDF5 is not thread-safe — serialize hourly landing predictions
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        for res in as_completed({executor.submit(_predict, s): s for s in slots}):
-            r = res.result()
-            if r:
-                results.append(r)
+            logger.warning("hourly_landing %s failed: %s", slot_dt.strftime("%H"), exc)
 
     results.sort(key=lambda r: r["hour"])
     return results
@@ -730,12 +724,22 @@ def run_rocketpy(
         trajectory_3d = {"t": [], "x": [], "y": [], "z": [], "ux": [], "uy": [], "uz": []}
 
     # ------------------------------------------------------------------
-    # 8. Hourly landing predictions — disabled
-    # Each slot fetches GFS via netCDF4/HDF5, which is not thread-safe and
-    # conflicts with the JPype JVM in the same process.  Wind drift is
-    # already shown in the weather panel; skip the per-slot predictions.
+    # 8. Hourly landing predictions (reuse env — no extra NOMADS calls)
     # ------------------------------------------------------------------
     hourly_landings: list = []
+    if use_live_weather and traj_t is not None and traj_z is not None and len(traj_t) > 1:
+        _ai = int(np.argmin(np.abs(traj_t - apogee_time_s)))
+        _apogee_lat = lat + float(traj_y[_ai]) / 111111.0
+        _apogee_lon = lon + float(traj_x[_ai]) / (111111.0 * math.cos(math.radians(lat)))
+        hourly_landings = _compute_hourly_landings(
+            env=env,
+            lat=lat, lon=lon,
+            apogee_lat=_apogee_lat, apogee_lon=_apogee_lon,
+            traj_t=traj_t, traj_z=traj_z,
+            apogee_time_s=apogee_time_s,
+            sim_datetime=sim_datetime,
+        )
+        logger.info("hourly_landings computed: %d slots", len(hourly_landings))
 
     # ------------------------------------------------------------------
     # 9. KML export

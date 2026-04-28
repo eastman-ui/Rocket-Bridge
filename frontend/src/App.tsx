@@ -389,6 +389,21 @@ export default function App() {
             </button>
             {appState === 'simulating' && <SimProgress stage={simStage} pct={simPct} />}
             {appState === 'error' && <ErrorBox message={errorMessage} />}
+            {results?.fin_comparison_diagram && (
+              <details className="bg-gray-900 border border-gray-800 rounded-xl">
+                <summary className="text-xs text-gray-400 uppercase tracking-wide font-semibold cursor-pointer px-3 py-2">
+                  Fin Shape Comparison
+                </summary>
+                <div className="px-3 pb-3">
+                  <img
+                    src={`data:image/png;base64,${results.fin_comparison_diagram}`}
+                    alt="Freeform vs trapezoidal fin comparison"
+                    className="w-full rounded"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">Blue = original freeform shape · Orange dashed = trapezoidal approximation</p>
+                </div>
+              </details>
+            )}
           </div>
 
           {/* RIGHT — results summary */}
@@ -428,58 +443,62 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Unsupported config warnings */}
+                {/* Unsupported config warnings — minimized by default */}
                 {results.warnings && results.warnings.length > 0 && (
-                  <div className="bg-yellow-950 border border-yellow-700 rounded-xl p-3 space-y-2">
-                    <p className="text-xs text-yellow-400 uppercase tracking-wide font-semibold">Configuration Warnings</p>
-                    {results.warnings.map((w, i) => (
-                      <p key={i} className="text-xs text-yellow-300">{w}</p>
-                    ))}
-                    {/* Fin override inputs when fallback values or freeform approximation detected */}
-                    {results.fin_sets?.filter(fs => fs.fallback_fields.length > 0 || results.fin_comparison_diagram).map(fs => (
-                      <details key={fs.index} open className="mt-2">
-                        <summary className="text-xs text-yellow-400 cursor-pointer font-medium">
-                          Fin Set {parseInt(fs.index) + 1} — edit corrected values
-                        </summary>
-                        <div className="grid grid-cols-2 gap-2 mt-2">
-                          {([
-                            ['root_chord', 'Root Chord (m)'],
-                            ['tip_chord', 'Tip Chord (m)'],
-                            ['span', 'Span (m)'],
-                            ['sweep_length', 'Sweep (m)'],
-                          ] as const).map(([field, label]) => (
-                            <label key={field} className="flex flex-col gap-0.5">
-                              <span className="text-[10px] text-gray-500">{label}
-                                {fs.fallback_fields.includes(field) &&
-                                  <span className="text-yellow-500 ml-1">(fallback)</span>}
-                              </span>
-                              <input
-                                type="number"
-                                step="any"
-                                value={finEdits[fs.index]?.[field as keyof FinSetInfo] ?? (fs as any)[field]}
-                                onChange={e => setFinEdits(prev => ({
-                                  ...prev,
-                                  [fs.index]: { ...prev[fs.index], [field]: parseFloat(e.target.value) || 0 },
-                                }))}
-                                className={`bg-gray-900 border rounded px-2 py-1 text-xs text-gray-200 w-full ${
-                                  fs.fallback_fields.includes(field) ? 'border-yellow-600' : 'border-gray-700'
-                                }`}
-                              />
-                            </label>
-                          ))}
-                        </div>
-                      </details>
-                    ))}
-                    {(results.fin_sets?.some(fs => fs.fallback_fields.length > 0) || results.fin_comparison_diagram) && (
-                      <button
-                        onClick={handleResimulateWithOverrides}
-                        disabled={resimulating}
-                        className="mt-2 bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed text-xs text-white font-medium px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                        {resimulating ? 'Re-running…' : 'Re-run with corrected fin values'}
-                      </button>
-                    )}
-                  </div>
+                  <details className="bg-yellow-950 border border-yellow-700 rounded-xl">
+                    <summary className="text-xs text-yellow-400 uppercase tracking-wide font-semibold cursor-pointer px-3 py-2">
+                      Configuration Warnings ({results.warnings.length})
+                    </summary>
+                    <div className="px-3 pb-3 space-y-1">
+                      {results.warnings.map((w, i) => (
+                        <p key={i} className="text-xs text-yellow-300">{w}</p>
+                      ))}
+                      {/* Fin override inputs when fallback values or freeform approximation detected */}
+                      {results.fin_sets?.filter(fs => fs.fallback_fields.length > 0 || results.fin_comparison_diagram).map(fs => (
+                        <details key={fs.index} open className="mt-2">
+                          <summary className="text-xs text-yellow-400 cursor-pointer font-medium">
+                            Fin Set {parseInt(fs.index) + 1} — edit corrected values
+                          </summary>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            {([
+                              ['root_chord', 'Root Chord (m)'],
+                              ['tip_chord', 'Tip Chord (m)'],
+                              ['span', 'Span (m)'],
+                              ['sweep_length', 'Sweep (m)'],
+                            ] as const).map(([field, label]) => (
+                              <label key={field} className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-gray-500">{label}
+                                  {fs.fallback_fields.includes(field) &&
+                                    <span className="text-yellow-500 ml-1">(fallback)</span>}
+                                </span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={finEdits[fs.index]?.[field as keyof FinSetInfo] ?? (fs as any)[field]}
+                                  onChange={e => setFinEdits(prev => ({
+                                    ...prev,
+                                    [fs.index]: { ...prev[fs.index], [field]: parseFloat(e.target.value) || 0 },
+                                  }))}
+                                  className={`bg-gray-900 border rounded px-2 py-1 text-xs text-gray-200 w-full ${
+                                    fs.fallback_fields.includes(field) ? 'border-yellow-600' : 'border-gray-700'
+                                  }`}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        </details>
+                      ))}
+                      {(results.fin_sets?.some(fs => fs.fallback_fields.length > 0) || results.fin_comparison_diagram) && (
+                        <button
+                          onClick={handleResimulateWithOverrides}
+                          disabled={resimulating}
+                          className="mt-2 bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed text-xs text-white font-medium px-3 py-1.5 rounded-lg transition-colors"
+                        >
+                          {resimulating ? 'Re-running…' : 'Re-run with corrected fin values'}
+                        </button>
+                      )}
+                    </div>
+                  </details>
                 )}
 
                 {/* Rocket diagram */}
@@ -489,18 +508,6 @@ export default function App() {
                     <img
                       src={`data:image/png;base64,${results.rocket_diagram}`}
                       alt="Rocket cross-section diagram"
-                      className="w-full rounded"
-                    />
-                  </div>
-                )}
-
-                {/* Fin comparison diagram */}
-                {results.fin_comparison_diagram && (
-                  <div className="bg-gray-900 rounded-xl p-3">
-                    <p className="text-xs text-gray-600 uppercase tracking-wide font-medium mb-2">Fin Shape Comparison</p>
-                    <img
-                      src={`data:image/png;base64,${results.fin_comparison_diagram}`}
-                      alt="Freeform vs trapezoidal fin comparison"
                       className="w-full rounded"
                     />
                   </div>

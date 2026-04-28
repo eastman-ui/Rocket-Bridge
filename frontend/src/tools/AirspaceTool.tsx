@@ -48,6 +48,8 @@ function aircraftIcon(heading: number): L.DivIcon {
   });
 }
 
+const FAA_KEY_KEY = 'rocketbridge_faa_api_key';
+
 export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   const imp = unitSystem === 'imperial';
   const mapRef = useRef<HTMLDivElement>(null);
@@ -66,12 +68,17 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   const [showNotam, setShowNotam] = useState(true);
   const [radius, setRadius] = useState(1.0); // degrees
   const [altFilter, setAltFilter] = useState<[number, number]>([0, 18000]); // meters
+  const [localLat, setLocalLat] = useState(config.lat);
+  const [localLon, setLocalLon] = useState(config.lon);
+  const [faaKey, setFaaKey] = useState(() => localStorage.getItem(FAA_KEY_KEY) ?? '');
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [locating, setLocating] = useState(false);
 
   const bbox = {
-    lamin: config.lat - radius,
-    lamax: config.lat + radius,
-    lomin: config.lon - radius,
-    lomax: config.lon + radius,
+    lamin: localLat - radius,
+    lamax: localLat + radius,
+    lomin: localLon - radius,
+    lomax: localLon + radius,
   };
 
   const fetchAircraft = async () => {
@@ -109,7 +116,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
     setLoadingNotam(true);
     setErrorNotam(null);
     try {
-      const url = `/api/airspace/notams?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}`;
+      const url = `/api/airspace/notams?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}${faaKey ? `&api_key=${encodeURIComponent(faaKey)}` : ''}`;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
@@ -139,12 +146,12 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
 
     const initMap = () => {
       if (leafletMap.current || !el) return;
-      const map = L.map(el, { center: [config.lat, config.lon], zoom: 8, zoomAnimation: false });
+      const map = L.map(el, { center: [localLat, localLon], zoom: 8, zoomAnimation: false });
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '© CartoDB', maxZoom: 18,
       }).addTo(map);
-      L.circleMarker([config.lat, config.lon], { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.8 })
-        .bindPopup(`<b>Launch Site</b><br>${config.lat.toFixed(4)}, ${config.lon.toFixed(4)}`)
+      L.circleMarker([localLat, localLon], { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.8 })
+        .bindPopup(`<b>Launch Site</b><br>${localLat.toFixed(4)}, ${localLon.toFixed(4)}`)
         .addTo(map);
       acLayerRef.current = L.layerGroup().addTo(map);
       notamLayerRef.current = L.layerGroup().addTo(map);
@@ -259,12 +266,30 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
             {[0.5, 1, 1.5, 2, 3].map(r => <option key={r} value={r}>{r}°</option>)}
           </select>
         </div>
+        <button
+          onClick={() => {
+            setLocating(true);
+            navigator.geolocation.getCurrentPosition(
+              pos => { setLocalLat(pos.coords.latitude); setLocalLon(pos.coords.longitude); setLocating(false); },
+              () => setLocating(false),
+              { enableHighAccuracy: true, timeout: 10000 },
+            );
+          }}
+          disabled={locating}
+          className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-0.5 rounded transition-colors disabled:opacity-50"
+          title="Use current location"
+        >
+          {locating ? '…' : '📍 My location'}
+        </button>
         {apogeeAlt > 0 && (
           <span className="text-gray-600">Expected apogee: <span className="text-blue-400">{apogeeAltDisp}</span></span>
         )}
         {(loadingAc || loadingNotam) && (
           <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
         )}
+      </div>
+      <div className="text-xs text-gray-500">
+        Center: <span className="text-gray-300">{localLat.toFixed(4)}, {localLon.toFixed(4)}</span>
       </div>
 
       {errorAc && (
@@ -278,8 +303,26 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
         </div>
       )}
       {notamUnavailable && (
-        <div className="text-xs text-gray-500 bg-gray-800/40 border border-gray-700/50 rounded-lg px-3 py-2">
-          NOTAM data requires a free FAA API key — not configured. Aircraft overlay active.
+        <div className="text-xs text-gray-500 bg-gray-800/40 border border-gray-700/50 rounded-lg px-3 py-2 space-y-2">
+          <p>NOTAM data requires a free FAA API key. <a href="https://notams.aim.faa.gov/notamSearch/SearchServlet" target="_blank" rel="noopener" className="text-blue-400 underline">Get a key from FAA NOTAM Search</a></p>
+          <button onClick={() => setShowKeyInput(k => !k)} className="text-blue-400 underline">
+            {showKeyInput ? 'Hide' : 'Add'} API key
+          </button>
+          {showKeyInput && (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={faaKey}
+                onChange={e => { setFaaKey(e.target.value); localStorage.setItem(FAA_KEY_KEY, e.target.value); }}
+                placeholder="FAA API key"
+                className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 flex-1"
+              />
+              <button onClick={() => { fetchNotams(); setShowKeyInput(false); }}
+                className="bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded text-[10px]">
+                Save & retry
+              </button>
+            </div>
+          )}
         </div>
       )}
 

@@ -497,10 +497,57 @@ async def airspace_aircraft(
 async def airspace_notams(
     lamin: float = Query(...), lomin: float = Query(...),
     lamax: float = Query(...), lomax: float = Query(...),
+    api_key: Optional[str] = Query(None),
 ):
-    # FAA NOTAM data requires an API key. Return empty list so the UI
-    # degrades gracefully instead of showing a CORS/502 error.
-    return {"items": [], "unavailable": True}
+    if not api_key:
+        return {"items": [], "unavailable": True}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://notams.aim.faa.gov/notamSearch/search",
+                params={
+                    "searchType": 0,
+                    "designatorsForLocationIdentifier": "",
+                    "notamType": "N",
+                    "format": "JSON",
+                    "latLow": lamin,
+                    "latHigh": lamax,
+                    "lonLow": lomin,
+                    "lonHigh": lomax,
+                    "key": api_key,
+                },
+            )
+            if resp.status_code != 200:
+                return {"items": [], "unavailable": True, "error": f"FAA API returned {resp.status_code}"}
+            data = resp.json()
+            items = []
+            for n in (data if isinstance(data, list) else data.get("notams", data.get("items", [])) or []):
+                try:
+                    coords = None
+                    lat_val = n.get("latitude") or n.get("lat")
+                    lon_val = n.get("longitude") or n.get("lon")
+                    if lat_val and lon_val:
+                        try:
+                            coords = {"lat": float(lat_val), "lon": float(lon_val)}
+                        except (ValueError, TypeError):
+                            pass
+                    items.append({
+                        "notamID": n.get("notamID", n.get("id", "—")),
+                        "location": n.get("location", n.get("icaoLocation")),
+                        "text": n.get("text", n.get("traditionalMessage", n.get("message"))),
+                        "startTime": n.get("effectiveStart", n.get("startDate")),
+                        "endTime": n.get("effectiveEnd", n.get("endDate")),
+                        "coordinates": coords,
+                        "radius": n.get("radius", 5),
+                        "altLower": n.get("lowerLimit"),
+                        "altUpper": n.get("upperLimit"),
+                    })
+                except Exception:
+                    continue
+            return {"items": items}
+    except Exception as e:
+        logger.warning("NOTAM fetch failed: %s", e)
+        return {"items": [], "unavailable": True, "error": str(e)}
 
 
 # ─── Monte Carlo ──────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ from typing import Optional
 
 import httpx
 
-from simulation import run_rocketpy
+from simulation import run_rocketpy, _build_environment
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +50,10 @@ async def _fetch_rasp(motor_id: str) -> Optional[str]:
         raw = results[0].get("data")
         if not raw:
             return None
-        # ThrustCurve returns base64-encoded file content
         try:
             return base64.b64decode(raw).decode("latin-1")
         except Exception:
-            return raw  # already plain text
+            return raw
 
 
 async def compare_motors(
@@ -68,11 +67,23 @@ async def compare_motors(
     heading: float,
     rocketpy_sem: asyncio.Semaphore,
     output_dir: str,
+    use_live_weather: bool = False,
+    sim_datetime: Optional[str] = None,
 ) -> list[dict]:
     """Swap each motor into the rocket params and run RocketPy.
 
-    Returns list of per-motor result dicts including designation and flight scalars.
+    When use_live_weather is True, a single GFS Environment is created
+    once and reused across all motor iterations.
     """
+    if use_live_weather:
+        async with rocketpy_sem:
+            env, weather_source = await asyncio.to_thread(
+                _build_environment, lat, lon, elevation, sim_datetime
+            )
+        logger.info("Motor compare: shared environment ready (%s)", weather_source)
+    else:
+        env = None
+
     results = []
 
     for motor_id in motor_ids:
@@ -82,12 +93,10 @@ async def compare_motors(
                 results.append({"motor_id": motor_id, "error": "No RASP data available"})
                 continue
 
-            # Write RASP to temp file
             eng_path = os.path.join(output_dir, f"motor_{motor_id}.eng")
             with open(eng_path, "w") as f:
                 f.write(rasp)
 
-            # Extract designation from RASP header (first non-comment line)
             designation = motor_id
             for line in rasp.splitlines():
                 line = line.strip()
@@ -95,10 +104,8 @@ async def compare_motors(
                     designation = line.split()[0]
                     break
 
-            # Deep-copy params and swap thrust source
             swapped = copy.deepcopy(base_params)
             swapped["motors"]["thrust_source"] = eng_path
-            # Clear grain geometry so simulation.py uses defaults
             for key in ("grain_number", "grain_density", "grain_outer_radius",
                         "grain_initial_inner_radius", "grain_initial_height"):
                 swapped["motors"][key] = 0
@@ -107,7 +114,7 @@ async def compare_motors(
                 raw = await asyncio.to_thread(
                     run_rocketpy,
                     swapped, lat, lon, elevation, rail_length, inclination, heading,
-                    False, output_dir,
+                    use_live_weather, output_dir, sim_datetime, env,
                 )
 
             results.append({

@@ -319,6 +319,8 @@ async def sweep_endpoint(
     rail_length: float = Query(5.2),
     inclination: float = Query(85.0),
     heading: float = Query(0.0),
+    use_live_weather: bool = Query(False),
+    sim_datetime: Optional[str] = Query(None),
     sweep_param: str = Query("inclination"),
     sweep_min: float = Query(70.0),
     sweep_max: float = Query(89.0),
@@ -351,6 +353,7 @@ async def sweep_endpoint(
                 params, lat, lon, elevation, rail_length, inclination, heading,
                 sweep_param, sweep_min, sweep_max, sweep_steps,  # type: ignore
                 _rocketpy_sem, tmp_dir,
+                use_live_weather, sim_datetime,
             )
             yield _sse("done", 100, results=results)
         except Exception as exc:
@@ -385,6 +388,8 @@ async def motor_compare_endpoint(
     rail_length: float = Query(5.2),
     inclination: float = Query(85.0),
     heading: float = Query(0.0),
+    use_live_weather: bool = Query(False),
+    sim_datetime: Optional[str] = Query(None),
     motor_ids: str = Query(...),  # comma-separated motor IDs
 ):
     if not file.filename or not file.filename.endswith(".ork"):
@@ -407,6 +412,7 @@ async def motor_compare_endpoint(
             results = await compare_motors(
                 params, ids, lat, lon, elevation, rail_length, inclination, heading,
                 _rocketpy_sem, tmp_dir,
+                use_live_weather, sim_datetime,
             )
             yield _sse("done", 100, results=results)
         except Exception as exc:
@@ -457,6 +463,8 @@ async def monte_carlo_endpoint(
     rail_length: float = Query(5.2),
     inclination: float = Query(85.0),
     heading: float = Query(0.0),
+    use_live_weather: bool = Query(False),
+    sim_datetime: Optional[str] = Query(None),
     n_sims: int = Query(50),
     wind_speed_std_ms: float = Query(2.0),
     mass_variation_pct: float = Query(2.0),
@@ -486,7 +494,9 @@ async def monte_carlo_endpoint(
             mc_task = asyncio.ensure_future(run_monte_carlo(
                 params, lat, lon, elevation, rail_length, inclination, heading,
                 n_sims, wind_speed_std_ms, mass_variation_pct, cd_variation_pct,
-                _rocketpy_sem, tmp_dir, on_progress,
+                _rocketpy_sem, tmp_dir,
+                use_live_weather, sim_datetime,
+                on_progress,
             ))
 
             pct = 10

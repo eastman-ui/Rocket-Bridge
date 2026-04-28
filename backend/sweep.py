@@ -1,9 +1,9 @@
 """Parameter sweep: run N RocketPy simulations varying a single launch parameter."""
 import asyncio
 import logging
-from typing import Literal
+from typing import Literal, Optional
 
-from simulation import run_rocketpy
+from simulation import run_rocketpy, _build_environment
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +24,28 @@ async def run_sweep(
     sweep_steps: int,
     rocketpy_sem: asyncio.Semaphore,
     output_dir: str,
+    use_live_weather: bool = False,
+    sim_datetime: Optional[str] = None,
 ) -> list[dict]:
     """Run sweep_steps simulations varying sweep_param from sweep_min to sweep_max.
 
-    Returns list of { param_value, apogee_m_agl, max_speed_ms, max_mach,
-                       stability_cal, off_rail_velocity } dicts.
+    When use_live_weather is True, a single GFS Environment is created
+    once and reused across all iterations.
     """
     steps = max(2, min(sweep_steps, 20))
     values = [
         sweep_min + (sweep_max - sweep_min) * i / (steps - 1)
         for i in range(steps)
     ]
+
+    if use_live_weather:
+        async with rocketpy_sem:
+            env, weather_source = await asyncio.to_thread(
+                _build_environment, lat, lon, elevation, sim_datetime
+            )
+        logger.info("Sweep: shared environment ready (%s)", weather_source)
+    else:
+        env = None
 
     results = []
     for v in values:
@@ -59,8 +70,10 @@ async def run_sweep(
                     kwargs["rail_length"],
                     kwargs["inclination"],
                     kwargs["heading"],
-                    False,
+                    use_live_weather,
                     output_dir,
+                    sim_datetime,
+                    env,
                 )
             results.append({
                 "param_value": round(v, 4),

@@ -276,6 +276,55 @@ def _compute_hourly_landings(
 
 
 # ---------------------------------------------------------------------------
+# Environment builder (shared by run_rocketpy and monte_carlo)
+# ---------------------------------------------------------------------------
+
+def _build_environment(
+    lat: float, lon: float, elevation: float,
+    sim_datetime: Optional[str] = None,
+) -> tuple["Environment", str]:
+    """Build a RocketPy Environment with NOMADS GFS if available.
+
+    Returns (env, weather_source) so callers can reuse the Environment
+    across multiple RocketPy runs without re-downloading GFS data.
+    """
+    env = Environment(latitude=lat, longitude=lon, elevation=elevation)
+    weather_source = "standard_atmosphere"
+    try:
+        if sim_datetime:
+            from datetime import datetime as _dt
+            parsed = _dt.fromisoformat(sim_datetime).replace(tzinfo=timezone.utc)
+        else:
+            parsed = datetime.now(tz=timezone.utc)
+        gfs_hour = (parsed.hour // 6) * 6
+        env.set_date((parsed.year, parsed.month, parsed.day, gfs_hour))
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(env.set_atmospheric_model, type="Forecast", file="GFS")
+            _fut.result(timeout=45)
+        surface_pressure = env.pressure(elevation)
+        surface_temp = env.temperature(elevation)
+        if not (50_000 <= surface_pressure <= 120_000):
+            raise ValueError(
+                f"NOMADS GFS returned implausible pressure {surface_pressure:.0f} Pa at {elevation}m "
+                "(expected 50,000–120,000 Pa); falling back to standard atmosphere."
+            )
+        if not (220 <= surface_temp <= 320):
+            raise ValueError(
+                f"NOMADS GFS returned implausible temperature {surface_temp:.1f} K at {elevation}m; "
+                "falling back to standard atmosphere."
+            )
+        weather_source = "NOMADS GFS"
+        logger.info("NOMADS GFS active. P=%.0f Pa, T=%.1f K, wind=%.2f m/s at %dm",
+                    surface_pressure, surface_temp, env.wind_speed(elevation), elevation)
+    except Exception as exc:
+        logger.warning("NOMADS GFS failed (%s); using standard_atmosphere.", exc)
+        env = Environment(latitude=lat, longitude=lon, elevation=elevation)
+        env.set_atmospheric_model(type="standard_atmosphere")
+    return env, weather_source
+
+
+# ---------------------------------------------------------------------------
 # Core entry point
 # ---------------------------------------------------------------------------
 
@@ -290,6 +339,7 @@ def run_rocketpy(
     use_live_weather: bool,
     output_dir: str,
     sim_datetime: Optional[str] = None,
+    prebuilt_env: "Environment | None" = None,
 ) -> dict:
     """Run RocketPy simulation from a parameters.json dict.
 
@@ -301,47 +351,15 @@ def run_rocketpy(
     # ------------------------------------------------------------------
     # 1. Environment
     # ------------------------------------------------------------------
-    env = Environment(latitude=lat, longitude=lon, elevation=elevation)
-
-    weather_source = "standard_atmosphere"
-    if use_live_weather:
-        try:
-            if sim_datetime:
-                # Parse local ISO string, treat as UTC (user intent: pick a GFS run)
-                from datetime import datetime as _dt
-                parsed = _dt.fromisoformat(sim_datetime).replace(tzinfo=timezone.utc)
-            else:
-                parsed = datetime.now(tz=timezone.utc)
-            # Round down to nearest 6-hour GFS run (00/06/12/18 UTC)
-            gfs_hour = (parsed.hour // 6) * 6
-            env.set_date((parsed.year, parsed.month, parsed.day, gfs_hour))
-            import concurrent.futures as _cf
-            with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
-                _fut = _ex.submit(env.set_atmospheric_model, type="Forecast", file="GFS")
-                _fut.result(timeout=45)  # raise TimeoutError if NOMADS stalls
-            # Sanity checks: pressure 50,000–120,000 Pa and temperature 220–320 K
-            # (RocketPy NOMADS unit bug returns pressure 100× too high — catches it here)
-            surface_pressure = env.pressure(elevation)
-            surface_temp = env.temperature(elevation)
-            if not (50_000 <= surface_pressure <= 120_000):
-                raise ValueError(
-                    f"NOMADS GFS returned implausible pressure {surface_pressure:.0f} Pa at {elevation}m "
-                    "(expected 50,000–120,000 Pa); falling back to standard atmosphere."
-                )
-            if not (220 <= surface_temp <= 320):
-                raise ValueError(
-                    f"NOMADS GFS returned implausible temperature {surface_temp:.1f} K at {elevation}m; "
-                    "falling back to standard atmosphere."
-                )
-            weather_source = "NOMADS GFS"
-            logger.info("NOMADS GFS active. P=%.0f Pa, T=%.1f K, wind=%.2f m/s at %dm",
-                        surface_pressure, surface_temp, env.wind_speed(elevation), elevation)
-        except Exception as exc:
-            logger.warning("NOMADS GFS failed (%s); using standard_atmosphere.", exc)
-            env = Environment(latitude=lat, longitude=lon, elevation=elevation)
-            env.set_atmospheric_model(type="standard_atmosphere")
+    if prebuilt_env is not None:
+        env = prebuilt_env
+        weather_source = "NOMADS GFS" if use_live_weather else "standard_atmosphere"
+    elif use_live_weather:
+        env, weather_source = _build_environment(lat, lon, elevation, sim_datetime)
     else:
+        env = Environment(latitude=lat, longitude=lon, elevation=elevation)
         env.set_atmospheric_model(type="standard_atmosphere")
+        weather_source = "standard_atmosphere"
 
     # ------------------------------------------------------------------
     # 2. SolidMotor

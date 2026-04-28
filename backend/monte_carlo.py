@@ -7,7 +7,7 @@ import os
 
 import numpy as np
 
-from simulation import run_rocketpy
+from simulation import run_rocketpy, _build_environment
 
 logger = logging.getLogger(__name__)
 
@@ -48,18 +48,32 @@ async def run_monte_carlo(
     cd_variation_pct: float,
     rocketpy_sem: asyncio.Semaphore,
     output_dir: str,
+    use_live_weather: bool = False,
+    sim_datetime: str | None = None,
     progress_callback=None,
 ) -> dict:
     """Run n_sims RocketPy simulations with randomized perturbations.
 
     Perturbations applied per run:
     - mass: rocket["mass"] ± mass_variation_pct %
-    - No direct wind injection (standard atmosphere); future: inject wind as env param
+    - inclination/heading: perturbed using wind_speed_std as proxy
 
-    Returns: { landings, apogee, max_velocity, stability, n_success }
+    When use_live_weather is True, a single GFS Environment is created
+    once and reused across all iterations — no redundant NOMADS downloads.
     """
     rng = np.random.default_rng()
     n_sims = max(10, min(n_sims, 500))
+
+    # Build environment once — reuse across all iterations
+    if use_live_weather:
+        async with rocketpy_sem:
+            env, weather_source = await asyncio.to_thread(
+                _build_environment, lat, lon, elevation, sim_datetime
+            )
+        logger.info("MC: shared environment ready (%s)", weather_source)
+    else:
+        env = None
+        weather_source = "standard_atmosphere"
 
     landings: list[dict] = []
     apogees: list[float] = []
@@ -74,8 +88,8 @@ async def run_monte_carlo(
         mass_factor = 1.0 + rng.normal(0, mass_variation_pct / 100)
         perturbed["rocket"]["mass"] = float(base_params["rocket"]["mass"]) * mass_factor
 
-        # Perturb inclination slightly (simulate launch rail cant) using wind_speed_std as proxy
-        incl_delta = rng.normal(0, wind_speed_std_ms * 0.3)  # ~0.3 deg per m/s std
+        # Perturb inclination/heading (wind_speed_std as proxy for spread)
+        incl_delta = rng.normal(0, wind_speed_std_ms * 0.3)
         perturbed_inclination = float(np.clip(inclination + incl_delta, 60, 89))
         perturbed_heading = heading + rng.normal(0, wind_speed_std_ms * 0.5)
 
@@ -85,7 +99,8 @@ async def run_monte_carlo(
                     run_rocketpy,
                     perturbed, lat, lon, elevation, rail_length,
                     perturbed_inclination, perturbed_heading,
-                    False, output_dir,
+                    use_live_weather, output_dir,
+                    sim_datetime, env,
                 )
 
             # Landing position from trajectory end
@@ -117,4 +132,5 @@ async def run_monte_carlo(
         "stability": _stats(stabilities),
         "n_success": n_success,
         "n_total": n_sims,
+        "weather_source": weather_source,
     }

@@ -56,6 +56,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   const leafletMap = useRef<L.Map | null>(null);
   const acLayerRef = useRef<L.LayerGroup | null>(null);
   const notamLayerRef = useRef<L.LayerGroup | null>(null);
+  const launchMarkerRef = useRef<L.CircleMarker | null>(null);
 
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   const [notams, setNotams] = useState<Notam[]>([]);
@@ -70,6 +71,12 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   const [altFilter, setAltFilter] = useState<[number, number]>([0, 18000]); // meters
   const [localLat, setLocalLat] = useState(config.lat);
   const [localLon, setLocalLon] = useState(config.lon);
+
+  // Sync with launch config when it changes (e.g., cache restore)
+  useEffect(() => {
+    setLocalLat(config.lat);
+    setLocalLon(config.lon);
+  }, [config.lat, config.lon]);
   const [faaKey, setFaaKey] = useState(() => localStorage.getItem(FAA_KEY_KEY) ?? '');
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [locating, setLocating] = useState(false);
@@ -150,9 +157,10 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '© CartoDB', maxZoom: 18,
       }).addTo(map);
-      L.circleMarker([localLat, localLon], { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.8 })
+      const marker = L.circleMarker([localLat, localLon], { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.8 })
         .bindPopup(`<b>Launch Site</b><br>${localLat.toFixed(4)}, ${localLon.toFixed(4)}`)
         .addTo(map);
+      launchMarkerRef.current = marker;
       acLayerRef.current = L.layerGroup().addTo(map);
       notamLayerRef.current = L.layerGroup().addTo(map);
       leafletMap.current = map;
@@ -183,6 +191,18 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
     obs.observe(el);
     return () => obs.disconnect();
   }, [leafletMap.current]);
+
+  // Re-center map and move launch marker when coordinates change
+  useEffect(() => {
+    const map = leafletMap.current;
+    const marker = launchMarkerRef.current;
+    if (!map) return;
+    map.setView([localLat, localLon], map.getZoom());
+    if (marker) {
+      marker.setLatLng([localLat, localLon]);
+      marker.bindPopup(`<b>Launch Site</b><br>${localLat.toFixed(4)}, ${localLon.toFixed(4)}`);
+    }
+  }, [localLat, localLon]);
 
   // Update aircraft layer
   useEffect(() => {
@@ -304,7 +324,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
       )}
       {notamUnavailable && (
         <div className="text-xs text-gray-500 bg-gray-800/40 border border-gray-700/50 rounded-lg px-3 py-2 space-y-2">
-          <p>NOTAM data requires a free FAA API key. <a href="https://notams.aim.faa.gov/notamSearch/SearchServlet" target="_blank" rel="noopener" className="text-blue-400 underline">Get a key from FAA NOTAM Search</a></p>
+          <p>NOTAM data requires a free FAA API key. <a href="https://aa.data.faa.gov/data/register.jsf" target="_blank" rel="noopener" className="text-blue-400 underline">Register for a free API key</a></p>
           <button onClick={() => setShowKeyInput(k => !k)} className="text-blue-400 underline">
             {showKeyInput ? 'Hide' : 'Add'} API key
           </button>

@@ -194,7 +194,7 @@ The OpenSky Network API has an anonymous rate limit of ~400 requests/day. If air
 
 ### NOTAMs show "API key not configured"
 
-NOTAM data requires a free FAA API key. In the Airspace tool, click "Add API key" in the banner and paste your key. It's saved in localStorage for reuse. Get a key from [FAA NOTAM Search](https://notams.aim.faa.gov/notamSearch/SearchServlet).
+NOTAM data requires a free FAA API key. In the Airspace tool, click "Add API key" in the banner and paste your key. It's saved in localStorage for reuse. Get a key from [FAA Data Portal](https://aa.data.faa.gov/data/register.jsf).
 
 ### "Results may be outdated" banner
 

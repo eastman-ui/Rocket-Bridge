@@ -66,7 +66,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
     setLoadingAc(true);
     setErrorAc(null);
     try {
-      const url = `https://opensky-network.org/api/states/all?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}`;
+      const url = `/api/airspace/aircraft?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}`;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
@@ -91,14 +91,17 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
     }
   };
 
+  const [notamUnavailable, setNotamUnavailable] = useState(false);
+
   const fetchNotams = async () => {
     setLoadingNotam(true);
     setErrorNotam(null);
     try {
-      const url = `https://aviationweather.gov/api/data/notam?format=json&bbox=${bbox.lamin},${bbox.lomin},${bbox.lamax},${bbox.lomax}`;
+      const url = `/api/airspace/notams?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}`;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
+      if (j.unavailable) { setNotamUnavailable(true); setNotams([]); return; }
       const items: Notam[] = (Array.isArray(j) ? j : j.items ?? []).map((n: any) => ({
         notamID: n.notamID ?? n.id ?? '—',
         location: n.location ?? n.icaoLocation,
@@ -108,6 +111,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
         altLower: n.lowerLimit,
         altUpper: n.upperLimit,
       }));
+      setNotamUnavailable(false);
       setNotams(items);
     } catch (e: any) {
       setErrorNotam(e.message);
@@ -227,10 +231,19 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
         )}
       </div>
 
-      {(errorAc || errorNotam) && (
-        <div className="text-xs text-red-400 bg-red-950/40 border border-red-800 rounded-lg px-3 py-2 space-y-1">
-          {errorAc && <p>Aircraft: {errorAc}</p>}
-          {errorNotam && <p>NOTAMs: {errorNotam} — <span className="text-red-300">aviationweather.gov may be unavailable</span></p>}
+      {errorAc && (
+        <div className="text-xs text-red-400 bg-red-950/40 border border-red-800 rounded-lg px-3 py-2">
+          Aircraft: {errorAc}
+        </div>
+      )}
+      {errorNotam && (
+        <div className="text-xs text-red-400 bg-red-950/40 border border-red-800 rounded-lg px-3 py-2">
+          NOTAMs: {errorNotam}
+        </div>
+      )}
+      {notamUnavailable && (
+        <div className="text-xs text-gray-500 bg-gray-800/40 border border-gray-700/50 rounded-lg px-3 py-2">
+          NOTAM data requires a free FAA API key — not configured. Aircraft overlay active.
         </div>
       )}
 

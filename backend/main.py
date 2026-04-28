@@ -7,6 +7,7 @@ import tempfile
 import logging
 from typing import Optional
 
+import httpx
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -401,6 +402,33 @@ async def motor_compare_endpoint(
 
     return StreamingResponse(generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ─── Airspace Proxies ─────────────────────────────────────────────────────────
+
+@app.get("/airspace/aircraft")
+async def airspace_aircraft(
+    lamin: float = Query(...), lomin: float = Query(...),
+    lamax: float = Query(...), lomax: float = Query(...),
+):
+    url = f"https://opensky-network.org/api/states/all?lamin={lamin}&lomin={lomin}&lamax={lamax}&lomax={lomax}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            return r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/airspace/notams")
+async def airspace_notams(
+    lamin: float = Query(...), lomin: float = Query(...),
+    lamax: float = Query(...), lomax: float = Query(...),
+):
+    # FAA NOTAM data requires an API key. Return empty list so the UI
+    # degrades gracefully instead of showing a CORS/502 error.
+    return {"items": [], "unavailable": True}
 
 
 # ─── Monte Carlo ──────────────────────────────────────────────────────────────

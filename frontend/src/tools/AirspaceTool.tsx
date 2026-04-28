@@ -34,7 +34,19 @@ interface Notam {
 }
 
 const M_FT = 3.28084;
-const REFRESH_INTERVAL = 60;
+const REFRESH_INTERVAL = 120; // 120s → ~720 req/day well within OpenSky 400/day anonymous limit
+
+function aircraftIcon(heading: number): L.DivIcon {
+  return L.divIcon({
+    className: '',
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+             style="transform:rotate(${heading}deg)">
+             <polygon points="12,2 16,20 12,16 8,20" fill="#f59e0b" stroke="#92400e" stroke-width="1"/>
+           </svg>`,
+  });
+}
 
 export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   const imp = unitSystem === 'imperial';
@@ -147,14 +159,9 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
     aircraft.forEach(ac => {
       const altDisp = imp ? Math.round(ac.alt_m * M_FT).toLocaleString() + ' ft' : Math.round(ac.alt_m).toLocaleString() + ' m';
       const spdDisp = imp ? Math.round(ac.velocity_ms * 2.23694) + ' mph' : Math.round(ac.velocity_ms) + ' m/s';
-      const marker = L.circleMarker([ac.lat, ac.lon], {
-        radius: 5,
-        color: '#f59e0b',
-        fillColor: '#f59e0b',
-        fillOpacity: 0.7,
-        weight: 1,
-      }).bindPopup(`<b>${ac.callsign}</b><br>Alt: ${altDisp}<br>Speed: ${spdDisp}<br>Heading: ${ac.heading}°`);
-      layer.addLayer(marker);
+      const m = L.marker([ac.lat, ac.lon], { icon: aircraftIcon(ac.heading) })
+        .bindPopup(`<b>${ac.callsign}</b><br>Alt: ${altDisp}<br>Speed: ${spdDisp}<br>Heading: ${ac.heading}°`);
+      layer.addLayer(m);
     });
   }, [aircraft, showAc, imp]);
 
@@ -182,6 +189,8 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
 
   useEffect(() => {
     const interval = setInterval(() => {
+      // Skip tick if tab/page not visible — don't waste API quota in background
+      if (document.hidden) return;
       setCountdown(c => {
         if (c <= 1) { fetchAircraft(); return REFRESH_INTERVAL; }
         return c - 1;
@@ -198,7 +207,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">Airspace</h3>
         <div className="flex items-center gap-3 text-xs">
-          <span className="text-gray-500">Auto-refresh in <span className="text-gray-300 tabular-nums">{countdown}s</span></span>
+          <span className="text-gray-500">Auto-refresh in <span className="text-gray-300 tabular-nums">{countdown}s</span> <span className="text-gray-700">(2 min)</span></span>
           <button onClick={() => { fetchAircraft(); fetchNotams(); setCountdown(REFRESH_INTERVAL); }}
             className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-2.5 py-1 rounded-lg transition-colors">
             Refresh now

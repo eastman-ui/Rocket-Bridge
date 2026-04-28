@@ -55,7 +55,11 @@ export function FinFlutterTool({ result, unitSystem }: Props) {
   const [rootChord, setRootChord] = useState(0.254);   // m
   const [tipChord, setTipChord] = useState(0.038);     // m
   const [span, setSpan] = useState(0.14);               // m
-  const [tc, setTc] = useState(0.06);                   // thickness/chord ratio
+  const [thickness, setThickness] = useState(0.00381); // m (absolute fin thickness)
+
+  // t/c = thickness / mean_chord; recomputed from absolute thickness
+  const meanChord = (rootChord + tipChord) / 2;
+  const tc = meanChord > 0 ? thickness / meanChord : 0.06;
   const [matIdx, setMatIdx] = useState(0);
   const [customG, setCustomG] = useState(20e9);
 
@@ -137,23 +141,24 @@ export function FinFlutterTool({ result, unitSystem }: Props) {
           <p className="text-xs text-gray-500">Fin geometry (pre-fill from your design, or edit):</p>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {[
-              { label: 'Root chord', unit: imp ? 'in' : 'm', val: rootChord, set: setRootChord, scale: imp ? 39.3701 : 1 },
-              { label: 'Tip chord',  unit: imp ? 'in' : 'm', val: tipChord,  set: setTipChord,  scale: imp ? 39.3701 : 1 },
-              { label: 'Span',       unit: imp ? 'in' : 'm', val: span,      set: setSpan,      scale: imp ? 39.3701 : 1 },
-              { label: 't/c ratio',  unit: '',               val: tc,        set: setTc,        scale: 1 },
-            ].map(({ label, unit, val, set, scale }) => (
+              { label: 'Root chord', unit: imp ? 'in' : 'm', val: rootChord,  set: setRootChord,  scale: imp ? 39.3701 : 1, step: 0.1 },
+              { label: 'Tip chord',  unit: imp ? 'in' : 'm', val: tipChord,   set: setTipChord,   scale: imp ? 39.3701 : 1, step: 0.1 },
+              { label: 'Span',       unit: imp ? 'in' : 'm', val: span,       set: setSpan,       scale: imp ? 39.3701 : 1, step: 0.1 },
+              { label: 'Thickness',  unit: imp ? 'in' : 'mm', val: thickness, set: setThickness,  scale: imp ? 39.3701 : 1000, step: 0.01 },
+            ].map(({ label, unit, val, set, scale, step }) => (
               <div key={label} className="flex flex-col gap-1">
                 <label className="text-xs text-gray-400">{label}{unit && <span className="ml-1 text-gray-600">{unit}</span>}</label>
                 <input
                   type="number"
-                  step={scale > 1 ? 0.1 : 0.001}
-                  value={parseFloat((val * scale).toFixed(scale > 1 ? 2 : 4))}
+                  step={step}
+                  value={parseFloat((val * scale).toFixed(3))}
                   onChange={e => set(parseFloat(e.target.value) / scale)}
                   className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:border-blue-500"
                 />
               </div>
             ))}
           </div>
+          <p className="text-[10px] text-gray-600">t/c ratio computed from thickness ÷ mean chord = {tc.toFixed(4)}</p>
 
           <div className="grid grid-cols-2 gap-2">
             <div className="flex flex-col gap-1">
@@ -205,6 +210,7 @@ export function FinFlutterTool({ result, unitSystem }: Props) {
             { label: 'Max rocket Mach', value: `Mach ${fmt(maxMach, 3)}` },
             { label: 'Aspect ratio (AR)', value: fmt((2 * span) / (rootChord + tipChord), 2) },
             { label: 'Taper ratio (λ)', value: fmt(tipChord / rootChord, 3) },
+            { label: 't/c ratio', value: fmt(tc, 4) },
             { label: 'Shear modulus (G)', value: `${(G / 1e9).toFixed(1)} GPa` },
           ].map(({ label, value }) => (
             <div key={label} className="flex items-center justify-between py-1 border-b border-gray-800/60">

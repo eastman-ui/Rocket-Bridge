@@ -405,6 +405,16 @@ export function TrajectoryMap({
     };
   }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, showAircraft, aircraft, weatherIsImperial, launchDateTime, hourlyLandings]);
 
+  // Resize map when container becomes visible (page switch)
+  useEffect(() => {
+    const map = leafletMap.current;
+    const el = mapRef.current;
+    if (!map || !el) return;
+    const obs = new ResizeObserver(() => { map.invalidateSize(); });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [leafletMap.current]);
+
   return (
     <div className="bg-gray-900 rounded-xl p-4">
       <div className="flex items-center justify-between mb-0.5">

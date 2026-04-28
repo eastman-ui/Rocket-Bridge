@@ -368,9 +368,9 @@ def run_rocketpy(
 
     thrust_csv = _resolve(motor_params["thrust_source"], output_dir)
 
-    # Defensive defaults for keys rocketserializer may omit or zero-out
+    # Defensive defaults for keys rocketserializer may omit or zero-out.
+    # Converter patches improve many of these — fallbacks are last resort.
     _grain_number = max(1, int(motor_params.get("grain_number", 1) or 1))
-    _grain_density = float(motor_params.get("grain_density", 0) or 0)
     _grain_or = float(motor_params.get("grain_outer_radius", 0) or 0)
     _grain_ir = float(motor_params.get("grain_initial_inner_radius", 0) or 0)
     _grain_h  = float(motor_params.get("grain_initial_height",  0) or 0)
@@ -384,8 +384,34 @@ def run_rocketpy(
         _grain_ir = _grain_or * 0.3
     if _grain_h <= 0:
         _grain_h = _grain_or * 3.0
+
+    # Grain density: prefer converter-computed value (derived from propellant mass
+    # and grain volume), then serializer value, then APCP fallback.
+    _grain_density = float(motor_params.get("grain_density", 0) or 0)
     if _grain_density <= 0:
-        _grain_density = 1750.0  # typical APCP density (kg/m³)
+        import math
+        _grain_volume = math.pi * (_grain_or ** 2 - _grain_ir ** 2) * _grain_h * _grain_number
+        _prop_mass = float(motor_params.get("propellant_mass", 0) or 0)
+        if _prop_mass > 0 and _grain_volume > 0:
+            _derived = _prop_mass / _grain_volume
+            if 800 <= _derived <= 2200:
+                _grain_density = _derived
+        if _grain_density <= 0:
+            _grain_density = 1750.0  # typical APCP density (kg/m³)
+
+    # Dry inertia: prefer converter-computed solid-cylinder estimate over zeros.
+    _dry_inertia_raw = motor_params.get("dry_inertia", [0, 0, 0]) or [0, 0, 0]
+    if all(v == 0 for v in _dry_inertia_raw):
+        _dry_mass = float(motor_params.get("dry_mass", 0) or 0)
+        if _dry_mass > 0 and _grain_or > 0:
+            _motor_len = _grain_h * _grain_number if _grain_h > 0 else _grain_or * 6
+            _I_long = _dry_mass * (3 * _grain_or ** 2 + _motor_len ** 2) / 12.0
+            _I_rot = _dry_mass * _grain_or ** 2 / 2.0
+            _dry_inertia = (_I_long, _I_long, _I_rot)
+        else:
+            _dry_inertia = tuple(_dry_inertia_raw)
+    else:
+        _dry_inertia = tuple(_dry_inertia_raw)
 
     _motor_pos = float(motor_params.get("position", 0) or 0)
     # Grain CG in motor-local coords (nozzle=0, positive toward combustion chamber):
@@ -400,7 +426,7 @@ def run_rocketpy(
         motor = SolidMotor(
             thrust_source=thrust_csv,
             dry_mass=float(motor_params.get("dry_mass", 0) or 0),
-            dry_inertia=tuple(motor_params.get("dry_inertia", [0, 0, 0]) or [0, 0, 0]),
+            dry_inertia=_dry_inertia,
             nozzle_radius=_nozzle_r,
             grain_number=_grain_number,
             grain_density=_grain_density,

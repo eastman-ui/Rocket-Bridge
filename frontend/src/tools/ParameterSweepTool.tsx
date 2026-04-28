@@ -1,14 +1,16 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import PlotlyImport from 'react-plotly.js';
 const Plot = (PlotlyImport as any).default ?? PlotlyImport;
 import type { ComparisonResponse } from '../types';
 import type { LaunchConfig } from '../components/LaunchConfig';
 import type { UnitSystem } from '../components/TimeSeriesCharts';
+import { nowRoundedLocalISO } from '../App';
 
 interface Props {
   result: ComparisonResponse;
   config: LaunchConfig;
   unitSystem: UnitSystem;
+  selectedFile?: File | null;
 }
 
 type SweepParam = 'inclination' | 'rail_length' | 'heading' | 'elevation';
@@ -31,7 +33,7 @@ interface SweepPoint {
 
 const M_FT = 3.28084;
 
-export function ParameterSweepTool({ result, config, unitSystem }: Props) {
+export function ParameterSweepTool({ result, config, unitSystem, selectedFile }: Props) {
   const imp = unitSystem === 'imperial';
   const [param, setParam] = useState<SweepParam>('inclination');
   const [sweepMin, setSweepMin] = useState(PARAM_DEFS.inclination.defaultMin);
@@ -40,9 +42,12 @@ export function ParameterSweepTool({ result, config, unitSystem }: Props) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [sweepData, setSweepData] = useState<SweepPoint[] | null>(null);
+  const [useLiveWeather, setUseLiveWeather] = useState(false);
+  const [weatherDateTime, setWeatherDateTime] = useState(nowRoundedLocalISO());
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [orkFile, setOrkFile] = useState<File | null>(null);
+  const [orkFile, setOrkFile] = useState<File | null>(selectedFile ?? null);
+  useEffect(() => { if (selectedFile) setOrkFile(selectedFile); }, [selectedFile]);
 
   const def = PARAM_DEFS[param];
 
@@ -73,6 +78,8 @@ export function ParameterSweepTool({ result, config, unitSystem }: Props) {
         sweep_min: sweepMin.toString(),
         sweep_max: sweepMax.toString(),
         sweep_steps: steps.toString(),
+        use_live_weather: useLiveWeather.toString(),
+        ...(useLiveWeather ? { sim_datetime: weatherDateTime } : {}),
       });
       const response = await fetch(`/api/sweep?${params}`, { method: 'POST', body: formData });
       if (!response.ok) {
@@ -151,6 +158,25 @@ export function ParameterSweepTool({ result, config, unitSystem }: Props) {
           {orkFile ? `📄 ${orkFile.name}` : 'Select .ork file'}
         </button>
         <span className="text-gray-600">Same file used in main simulation</span>
+      </div>
+
+      {/* Weather */}
+      <div className="flex items-start gap-3 text-xs">
+        <input id="sweep-live-weather" type="checkbox" checked={useLiveWeather}
+          onChange={e => { const next = e.target.checked; setUseLiveWeather(next); if (next) setWeatherDateTime(nowRoundedLocalISO()); }}
+          className="mt-0.5 accent-blue-500" />
+        <div className="flex-1">
+          <label htmlFor="sweep-live-weather" className="text-gray-300 cursor-pointer select-none">Use live weather (NOMADS GFS)</label>
+          {useLiveWeather && (
+            <div className="mt-2 space-y-1">
+              <label className="text-gray-400">Forecast date/time (local)</label>
+              <input type="datetime-local" value={weatherDateTime}
+                onChange={e => setWeatherDateTime(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:border-blue-500" />
+              <p className="text-gray-600">GFS runs every 6 h — fetches nearest 00/06/12/18 UTC run.</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Controls */}

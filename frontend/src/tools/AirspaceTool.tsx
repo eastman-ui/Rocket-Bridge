@@ -132,23 +132,50 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
     }
   };
 
-  // Init map
+  // Init map — wait until container is visible (handles hidden-on-mount case)
   useEffect(() => {
-    if (!mapRef.current || leafletMap.current) return;
-    const map = L.map(mapRef.current, { center: [config.lat, config.lon], zoom: 8, zoomAnimation: false });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© CartoDB', maxZoom: 18,
-    }).addTo(map);
-    // Launch site marker
-    L.circleMarker([config.lat, config.lon], { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.8 })
-      .bindPopup(`<b>Launch Site</b><br>${config.lat.toFixed(4)}, ${config.lon.toFixed(4)}`)
-      .addTo(map);
-    // Apogee altitude reference circle (very rough horizontal radius — just visual)
-    acLayerRef.current = L.layerGroup().addTo(map);
-    notamLayerRef.current = L.layerGroup().addTo(map);
-    leafletMap.current = map;
-    return () => { map.remove(); leafletMap.current = null; };
+    const el = mapRef.current;
+    if (!el) return;
+
+    const initMap = () => {
+      if (leafletMap.current || !el) return;
+      const map = L.map(el, { center: [config.lat, config.lon], zoom: 8, zoomAnimation: false });
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '© CartoDB', maxZoom: 18,
+      }).addTo(map);
+      L.circleMarker([config.lat, config.lon], { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.8 })
+        .bindPopup(`<b>Launch Site</b><br>${config.lat.toFixed(4)}, ${config.lon.toFixed(4)}`)
+        .addTo(map);
+      acLayerRef.current = L.layerGroup().addTo(map);
+      notamLayerRef.current = L.layerGroup().addTo(map);
+      leafletMap.current = map;
+    };
+
+    if (el.offsetParent !== null) {
+      initMap();
+    } else {
+      const visObs = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          visObs.disconnect();
+          setTimeout(initMap, 50);
+        }
+      }, { threshold: 0 });
+      visObs.observe(el);
+      return () => visObs.disconnect();
+    }
+
+    return () => { if (leafletMap.current) { leafletMap.current.remove(); leafletMap.current = null; } };
   }, []);
+
+  // Resize map when container becomes visible (tab/page switch)
+  useEffect(() => {
+    const map = leafletMap.current;
+    const el = mapRef.current;
+    if (!map || !el) return;
+    const obs = new ResizeObserver(() => { map.invalidateSize(); });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [leafletMap.current]);
 
   // Update aircraft layer
   useEffect(() => {

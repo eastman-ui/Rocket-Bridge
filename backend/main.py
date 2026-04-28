@@ -92,12 +92,16 @@ def _extract_rocket_params(params: dict) -> dict:
     motor_dry = float(motor.get("dry_mass", 0))
 
     try:
-        grain_count = int(motor.get("grain_number", 0))
-        grain_density = float(motor.get("grain_density", 0))
-        ro = float(motor.get("grain_outer_radius", 0))
-        ri = float(motor.get("grain_initial_inner_radius", 0))
-        h = float(motor.get("grain_initial_height", 0))
-        propellant_mass = grain_count * grain_density * math.pi * (ro ** 2 - ri ** 2) * h
+        # Prefer converter-derived propellant_mass (from timeseries max - min motor mass)
+        propellant_mass = float(motor.get("propellant_mass", 0) or 0)
+        if propellant_mass <= 0:
+            # Fallback: compute from grain geometry (inaccurate for multi-grain motors)
+            grain_count = int(motor.get("grain_number", 0))
+            grain_density = float(motor.get("grain_density", 0))
+            ro = float(motor.get("grain_outer_radius", 0))
+            ri = float(motor.get("grain_initial_inner_radius", 0))
+            h = float(motor.get("grain_initial_height", 0))
+            propellant_mass = grain_count * grain_density * math.pi * (ro ** 2 - ri ** 2) * h
     except Exception:
         propellant_mass = 0.0
 
@@ -225,6 +229,9 @@ async def simulate(
             # Convert
             yield _sse("converting", 20)
             params = await asyncio.to_thread(convert_ork, ork_path, tmp_dir)
+            # Add converter fallback warnings to OR validation warnings
+            for fw in params.pop("_fallback_warnings", []):
+                ork_warnings.append(fw)
             rocket_params = RocketParams(**_extract_rocket_params(params))
 
             # Run OR extraction and RocketPy in parallel

@@ -1,14 +1,16 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import PlotlyImport from 'react-plotly.js';
 const Plot = (PlotlyImport as any).default ?? PlotlyImport;
 import type { ComparisonResponse } from '../types';
 import type { LaunchConfig } from '../components/LaunchConfig';
 import type { UnitSystem } from '../components/TimeSeriesCharts';
+import { nowRoundedLocalISO } from '../App';
 
 interface Props {
   result: ComparisonResponse;
   config: LaunchConfig;
   unitSystem: UnitSystem;
+  selectedFile?: File | null;
 }
 
 interface MotorResult {
@@ -33,7 +35,7 @@ interface MotorSuggestion {
 
 const M_FT = 3.28084;
 
-export function MotorCompareTool({ result, config, unitSystem }: Props) {
+export function MotorCompareTool({ result, config, unitSystem, selectedFile }: Props) {
   const imp = unitSystem === 'imperial';
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<MotorSuggestion[]>([]);
@@ -41,9 +43,12 @@ export function MotorCompareTool({ result, config, unitSystem }: Props) {
   const [selectedMotors, setSelectedMotors] = useState<MotorSuggestion[]>([]);
   const [running, setRunning] = useState(false);
   const [compareResults, setCompareResults] = useState<MotorResult[] | null>(null);
+  const [useLiveWeather, setUseLiveWeather] = useState(false);
+  const [weatherDateTime, setWeatherDateTime] = useState(nowRoundedLocalISO());
   const [error, setError] = useState<string | null>(null);
-  const [orkFile, setOrkFile] = useState<File | null>(null);
+  const [orkFile, setOrkFile] = useState<File | null>(selectedFile ?? null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (selectedFile) setOrkFile(selectedFile); }, [selectedFile]);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const originalMotor = result.rocket_params?.motor_designation ?? 'Original';
@@ -91,6 +96,8 @@ export function MotorCompareTool({ result, config, unitSystem }: Props) {
         inclination: config.inclination.toString(),
         heading: config.heading.toString(),
         motor_ids: selectedMotors.map(m => m.id).join(','),
+        use_live_weather: useLiveWeather.toString(),
+        ...(useLiveWeather ? { sim_datetime: weatherDateTime } : {}),
       });
       const response = await fetch(`/api/motors/compare?${params}`, { method: 'POST', body: formData });
       if (!response.ok) {
@@ -152,6 +159,25 @@ export function MotorCompareTool({ result, config, unitSystem }: Props) {
           {orkFile ? `📄 ${orkFile.name}` : 'Select .ork file'}
         </button>
         <span className="text-gray-600">Original: <span className="text-gray-400">{originalMotor}</span></span>
+      </div>
+
+      {/* Weather */}
+      <div className="flex items-start gap-3 text-xs">
+        <input id="motor-live-weather" type="checkbox" checked={useLiveWeather}
+          onChange={e => { const next = e.target.checked; setUseLiveWeather(next); if (next) setWeatherDateTime(nowRoundedLocalISO()); }}
+          className="mt-0.5 accent-blue-500" />
+        <div className="flex-1">
+          <label htmlFor="motor-live-weather" className="text-gray-300 cursor-pointer select-none">Use live weather (NOMADS GFS)</label>
+          {useLiveWeather && (
+            <div className="mt-2 space-y-1">
+              <label className="text-gray-400">Forecast date/time (local)</label>
+              <input type="datetime-local" value={weatherDateTime}
+                onChange={e => setWeatherDateTime(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:border-blue-500" />
+              <p className="text-gray-600">GFS runs every 6 h — fetches nearest 00/06/12/18 UTC run.</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Motor search */}

@@ -294,9 +294,9 @@ export default function App() {
         </div>
       </header>
 
-      {activePage === 'tools' && (
-        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} />
-      )}
+      <div className={activePage !== 'tools' ? 'hidden' : ''}>
+        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} selectedFile={selectedFile} />
+      </div>
 
       <main className={`max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1 ${activePage !== 'main' ? 'hidden' : ''}`}>
         {/* Two-column: input left, results right */}

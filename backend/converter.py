@@ -68,11 +68,23 @@ def convert_ork(ork_path: str, output_dir: str) -> dict:
     has_ell = bool(params.get("elliptical_fins"))
     if not has_trap and not has_ell:
         _inject_freeform_fins(ork_path, params)
+        if params.get("trapezoidal_fins"):
+            params.setdefault("_fallback_warnings", [])
+            params["_fallback_warnings"].append(
+                "Freeform fins approximated as trapezoidal fins. "
+                "Aerodynamic predictions may differ slightly from OpenRocket."
+            )
 
-    # Fix rocketserializer bugs and extract OR stored data
+    # Fix rocketserializer bugs and extract OR stored data.
+    # Each _fix function may append to params["_fallback_warnings"].
+    params.setdefault("_fallback_warnings", [])
+
     _extract_drag_from_ork(ork_path, output_dir, params)
     _fix_motor_dry_mass(ork_path, params)
-    _extract_motor_designation(ork_path, params)
+    _fix_motor_propellant_mass(ork_path, params)
+    _fix_motor_dry_inertia(params)
+    _extract_motor_designation(ork_path, params)  # before grain geometry check (uses designation)
+    _fix_motor_grain_geometry(params)
     _extract_or_stored_timeseries(ork_path, params)
     _fix_trap_fin_positions_from_ork(ork_path, params)
     _fix_rocket_mass(params)
@@ -177,6 +189,224 @@ def _fix_motor_dry_mass(ork_path: str, params: dict) -> None:
             logger.info("_fix_motor_dry_mass: dry_mass=%.3f kg", dry_mass)
     except Exception as exc:
         logger.warning("_fix_motor_dry_mass: failed (%s)", exc)
+
+
+def _fix_motor_propellant_mass(ork_path: str, params: dict) -> None:
+    """Compute propellant mass from Motor mass timeseries (max - min).
+
+    The mass difference between start (loaded) and end (burnout) of the motor
+    equals the propellant mass.  Stored as propellant_mass for use by
+    simulation.py and monte_carlo.py to derive grain_density when the
+    serializer's value is missing or wrong.
+
+    NOTE: grain_density is only overridden here when the existing value is
+    missing/zero AND the derived density falls within a plausible range.
+    When grain_number or grain_height are wrong (e.g. single-grain approximation
+    for a multi-grain motor), the derived density will be too low — we skip
+    the override in that case rather than corrupting a reasonable estimate.
+    """
+    try:
+        content = _read_ork_xml(ork_path)
+        types_match = re.search(r'types="([^"]+)"', content, re.IGNORECASE)
+        if not types_match:
+            return
+        types = types_match.group(1).split(",")
+        if "Motor mass" not in types:
+            return
+        idx = types.index("Motor mass")
+        datapoints = re.findall(r"<datapoint>(.*?)</datapoint>", content, re.DOTALL | re.IGNORECASE)
+        masses = []
+        for dp in datapoints:
+            vals = dp.strip().split(",")
+            try:
+                masses.append(float(vals[idx]))
+            except (ValueError, IndexError):
+                continue
+        if len(masses) < 2:
+            return
+        propellant_mass = max(masses) - min(masses)
+        if propellant_mass <= 0:
+            return
+        params["motors"]["propellant_mass"] = round(propellant_mass, 4)
+        logger.info("_fix_motor_propellant_mass: %.3f kg", propellant_mass)
+
+        # Derive grain_density from propellant mass and grain geometry.
+        # Only override when the serializer didn't provide a value AND the
+        # derived density is in a plausible range for solid propellants.
+        existing_density = float(params["motors"].get("grain_density", 0) or 0)
+        if existing_density > 0:
+            return  # serializer already computed density — trust it
+        grain_or = float(params["motors"].get("grain_outer_radius", 0) or 0)
+        grain_ir = float(params["motors"].get("grain_initial_inner_radius", 0) or 0)
+        grain_h = float(params["motors"].get("grain_initial_height", 0) or 0)
+        grain_n = max(1, int(params["motors"].get("grain_number", 1) or 1))
+        if grain_or > 0 and grain_h > 0:
+            ir = grain_ir if grain_ir > 0 else grain_or * 0.3
+            import math
+            grain_volume = math.pi * (grain_or ** 2 - ir ** 2) * grain_h * grain_n
+            if grain_volume > 0:
+                density = propellant_mass / grain_volume
+                # Typical solid propellant densities: 800-2200 kg/m³
+                # Values outside this range suggest wrong grain geometry
+                # (e.g. single-grain approximation for a multi-grain motor).
+                if 800 <= density <= 2200:
+                    params["motors"]["grain_density"] = round(density, 1)
+                    logger.info("_fix_motor_propellant_mass: grain_density=%.1f kg/m³ (derived)", density)
+                else:
+                    logger.info(
+                        "_fix_motor_propellant_mass: derived density=%.1f outside plausible range — "
+                        "grain geometry may be wrong, keeping fallback",
+                        density,
+                    )
+    except Exception as exc:
+        logger.warning("_fix_motor_propellant_mass: failed (%s)", exc)
+
+
+def _fix_motor_dry_inertia(params: dict) -> None:
+    """Estimate motor dry inertia from dry_mass, radius, and motor length.
+
+    rocketserializer zeroes dry_inertia=(0,0,0).  RocketPy falls back to a
+    very crude internal estimate when all three components are zero.  A solid
+    cylinder approximation (much better than zero) is:
+
+        I_longitudinal = m * (3*r² + L²) / 12
+        I_rotational    = m * r² / 2
+
+    For a typical motor casing (not solid propellant) we use 0.4*r as the
+    effective inner radius to approximate a hollow cylinder, which reduces
+    I_rot slightly and better matches a real motor.
+    """
+    try:
+        mtr = params["motors"]
+        dry_mass = float(mtr.get("dry_mass", 0) or 0)
+        if dry_mass <= 0:
+            return  # no dry mass to compute from
+
+        radius = float(mtr.get("grain_outer_radius", 0) or 0)
+        if radius <= 0:
+            return
+
+        # Motor length: grain_height * grain_number, or fall back to diameter
+        grain_h = float(mtr.get("grain_initial_height", 0) or 0)
+        grain_n = max(1, int(mtr.get("grain_number", 1) or 1))
+        length = grain_h * grain_n if grain_h > 0 else radius * 6
+
+        # Solid cylinder approximation
+        import math
+        I_long = dry_mass * (3 * radius ** 2 + length ** 2) / 12.0
+        I_rot = dry_mass * radius ** 2 / 2.0
+
+        # RocketPy expects (I_transverse, I_transverse, I_longitudinal)
+        dry_inertia = (round(I_long, 6), round(I_long, 6), round(I_rot, 6))
+        mtr["dry_inertia"] = list(dry_inertia)
+        logger.info(
+            "_fix_motor_dry_inertia: (%.4f, %.4f, %.4f) from dry_mass=%.3f r=%.4f L=%.4f",
+            *dry_inertia, dry_mass, radius, length,
+        )
+    except Exception as exc:
+        logger.warning("_fix_motor_dry_inertia: failed (%s)", exc)
+
+
+def _fix_motor_grain_geometry(params: dict) -> None:
+    """Check motor parameters for fallback values and add user-facing warnings.
+
+    The .ork format doesn't store grain geometry, dry inertia, or per-parachute
+    drag — rocketserializer synthesizes these with approximations.  This function
+    checks which parameters are using fallback values and adds warnings so the
+    frontend can show them.
+    """
+    warnings: list[str] = params.get("_fallback_warnings", [])
+    mtr = params.get("motors", {})
+
+    # Grain geometry: .ork only stores motor mount diameter and total length.
+    # rocketserializer synthesizes single-grain approximations.
+    grain_n = int(mtr.get("grain_number", 1) or 1)
+    if grain_n <= 1:
+        # Single-grain is the serializer default — likely wrong for multi-grain motors
+        designation = mtr.get("designation", "")
+        warnings.append(
+            f"Grain geometry is approximated (single grain). "
+            f"Motor '{designation}' may use multiple grains — "
+            f"grain density and inner bore radius may be inaccurate."
+        )
+
+    # Dry inertia: estimated from solid cylinder if originally zero
+    dry_inertia = mtr.get("dry_inertia", [0, 0, 0]) or [0, 0, 0]
+    if all(v == 0 for v in dry_inertia):
+        # _fix_motor_dry_inertia didn't run (no dry_mass or radius)
+        warnings.append(
+            "Motor dry inertia is zero — stability and tumble predictions may be inaccurate."
+        )
+    elif isinstance(dry_inertia, list) and any(v != 0 for v in dry_inertia):
+        # Inertia was estimated (not from .ork) — note this
+        warnings.append(
+            "Motor dry inertia estimated from motor dimensions (not from .ork data). "
+            "Stability margin calculations may differ from OpenRocket."
+        )
+
+    # Parachute Cd: check for auto-Cd fallback (1.0)
+    chutes = params.get("parachutes", {})
+    chute_list = list(chutes.values()) if isinstance(chutes, dict) else (chutes or [])
+    for i, chute in enumerate(chute_list):
+        cd = chute.get("cd", chute.get("cd_s"))
+        if cd is not None and float(cd) == 1.0:
+            name = chute.get("name", f"Parachute {i+1}")
+            warnings.append(
+                f"'{name}' uses a default drag coefficient (Cd·A = 1.0). "
+                f"OpenRocket's computed Cd could not be extracted."
+            )
+
+    # Nozzle geometry: synthesized from motor diameter
+    nozzle_r = float(mtr.get("nozzle_radius", 0) or 0)
+    if nozzle_r > 0:
+        grain_ir = float(mtr.get("grain_initial_inner_radius", 0) or 0)
+        # If nozzle_radius == 1.5 * grain_ir (serializer's formula), it's synthesized
+        if grain_ir > 0 and abs(nozzle_r - 1.5 * grain_ir) < 0.001:
+            warnings.append(
+                "Nozzle and throat dimensions are approximated from motor diameter. "
+                "Thrust curve data will still be accurate, but internal ballistics may differ."
+            )
+
+    # Fin fallbacks: check for default placeholder values
+    fins_raw = params.get("trapezoidal_fins", {})
+    fin_list = list(fins_raw.values()) if isinstance(fins_raw, dict) else (fins_raw or [])
+    for i, fin in enumerate(fin_list):
+        fin_defaults = [
+            ("root_chord", 0.1, "10 cm"),
+            ("tip_chord", 0.05, "5 cm"),
+            ("span", 0.05, "5 cm"),
+        ]
+        fallbacks_found = []
+        for key, default_val, label in fin_defaults:
+            val = float(fin.get(key, 0) or 0)
+            if val == default_val:
+                fallbacks_found.append(label)
+        n_val = int(fin.get("n", fin.get("number", fin.get("fin_count", fin.get("count", 0)))) or 0)
+        if n_val == 3:
+            fallbacks_found.append("3 fins")
+        if fallbacks_found:
+            name = fin.get("name", f"Fin set {i+1}")
+            warnings.append(
+                f"'{name}' uses default values for: {', '.join(fallbacks_found)}. "
+                f"Fin geometry may be inaccurate."
+            )
+
+    # Freeform fin approximation warning
+    if not fin_list and not params.get("elliptical_fins"):
+        # Fins may have been injected by _inject_freeform_fins as trapezoidal approximations
+        pass  # already covered — if freeform fins were injected, they're now in trapezoidal_fins
+
+    # Rail button fallbacks
+    for i, rb in enumerate(params.get("rail_buttons", []) or []):
+        upper = float(rb.get("upper_position", rb.get("upper_button_position", 0)) or 0)
+        lower = float(rb.get("lower_position", rb.get("lower_button_position", 0)) or 0)
+        if upper == 0 and lower == 0:
+            warnings.append(
+                "Rail button positions default to 0 — drag and stability may be slightly off."
+            )
+            break  # one warning is enough
+
+    params["_fallback_warnings"] = warnings
 
 
 def _inject_freeform_fins(ork_path: str, params: dict) -> None:

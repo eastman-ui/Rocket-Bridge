@@ -13,6 +13,7 @@ interface ToolsPageProps {
   cachedResult: ComparisonResponse | null;
   config: LaunchConfig;
   unitSystem: UnitSystem;
+  selectedFile?: File | null;
 }
 
 type ToolId = 'flutter' | 'flightcard' | 'airspace' | 'sweep' | 'motors' | 'montecarlo';
@@ -95,7 +96,7 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
-export function ToolsPage({ cachedResult, config, unitSystem }: ToolsPageProps) {
+export function ToolsPage({ cachedResult, config, unitSystem, selectedFile }: ToolsPageProps) {
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
   const hasResult = cachedResult !== null;
 
@@ -156,29 +157,37 @@ export function ToolsPage({ cachedResult, config, unitSystem }: ToolsPageProps) 
         })}
       </div>
 
-      {/* Active tool panel */}
-      {activeTool && (
-        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-          {activeTool === 'flutter' && cachedResult && (
+      {/* Active tool panel — keep all mounted so state persists across tab switches */}
+      <div className="bg-gray-900 rounded-xl border border-gray-800 p-5" style={activeTool ? {} : { display: 'none' }}>
+        {cachedResult && (
+          <div style={activeTool === 'flutter' ? {} : { display: 'none' }}>
             <FinFlutterTool result={cachedResult} unitSystem={unitSystem} />
-          )}
-          {activeTool === 'flightcard' && cachedResult && (
+          </div>
+        )}
+        {cachedResult && (
+          <div style={activeTool === 'flightcard' ? {} : { display: 'none' }}>
             <FlightCardTool result={cachedResult} config={config} unitSystem={unitSystem} />
-          )}
-          {activeTool === 'airspace' && (
-            <AirspaceTool config={config} unitSystem={unitSystem} apogeeM={cachedResult?.rocketpy_results.apogee_m_agl} />
-          )}
-          {activeTool === 'sweep' && cachedResult && (
-            <ParameterSweepTool result={cachedResult} config={config} unitSystem={unitSystem} />
-          )}
-          {activeTool === 'motors' && cachedResult && (
-            <MotorCompareTool result={cachedResult} config={config} unitSystem={unitSystem} />
-          )}
-          {activeTool === 'montecarlo' && cachedResult && (
-            <MonteCarloTool result={cachedResult} config={config} unitSystem={unitSystem} />
-          )}
+          </div>
+        )}
+        <div style={activeTool === 'airspace' ? {} : { display: 'none' }}>
+          <AirspaceTool config={config} unitSystem={unitSystem} apogeeM={cachedResult?.rocketpy_results.apogee_m_agl} />
         </div>
-      )}
+        {cachedResult && (
+          <div style={activeTool === 'sweep' ? {} : { display: 'none' }}>
+            <ParameterSweepTool result={cachedResult} config={config} unitSystem={unitSystem} selectedFile={selectedFile} />
+          </div>
+        )}
+        {cachedResult && (
+          <div style={activeTool === 'motors' ? {} : { display: 'none' }}>
+            <MotorCompareTool result={cachedResult} config={config} unitSystem={unitSystem} selectedFile={selectedFile} />
+          </div>
+        )}
+        {cachedResult && (
+          <div style={activeTool === 'montecarlo' ? {} : { display: 'none' }}>
+            <MonteCarloTool result={cachedResult} config={config} unitSystem={unitSystem} selectedFile={selectedFile} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

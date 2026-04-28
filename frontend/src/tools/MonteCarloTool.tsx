@@ -4,11 +4,13 @@ import 'leaflet/dist/leaflet.css';
 import type { ComparisonResponse } from '../types';
 import type { LaunchConfig } from '../components/LaunchConfig';
 import type { UnitSystem } from '../components/TimeSeriesCharts';
+import { nowRoundedLocalISO } from '../App';
 
 interface Props {
   result: ComparisonResponse;
   config: LaunchConfig;
   unitSystem: UnitSystem;
+  selectedFile?: File | null;
 }
 
 interface MCStats { mean: number; std: number; p5: number; p50: number; p95: number; }
@@ -23,7 +25,7 @@ interface MCResult {
 
 const M_FT = 3.28084;
 
-export function MonteCarloTool({ result, config, unitSystem }: Props) {
+export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Props) {
   const imp = unitSystem === 'imperial';
   const [nSims, setNSims] = useState(50);
   const [windStd, setWindStd] = useState(2.0);
@@ -33,25 +35,60 @@ export function MonteCarloTool({ result, config, unitSystem }: Props) {
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [mcResult, setMcResult] = useState<MCResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [orkFile, setOrkFile] = useState<File | null>(null);
+  const [useLiveWeather, setUseLiveWeather] = useState(false);
+  const [weatherDateTime, setWeatherDateTime] = useState(nowRoundedLocalISO());
+  const [orkFile, setOrkFile] = useState<File | null>(selectedFile ?? null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (selectedFile) setOrkFile(selectedFile); }, [selectedFile]);
   const leafletMap = useRef<L.Map | null>(null);
   const landingLayer = useRef<L.LayerGroup | null>(null);
 
-  // Init map
+  // Init map — wait until container is visible (handles hidden-on-mount case)
   useEffect(() => {
-    if (!mapRef.current || leafletMap.current) return;
-    const map = L.map(mapRef.current, { center: [config.lat, config.lon], zoom: 11, zoomAnimation: false });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© CartoDB', maxZoom: 18,
-    }).addTo(map);
-    L.circleMarker([config.lat, config.lon], { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.9 })
-      .bindPopup('Launch Site').addTo(map);
-    landingLayer.current = L.layerGroup().addTo(map);
-    leafletMap.current = map;
-    return () => { map.remove(); leafletMap.current = null; };
+    const el = mapRef.current;
+    if (!el) return;
+
+    const initMap = () => {
+      if (leafletMap.current || !el) return;
+      const map = L.map(el, { center: [config.lat, config.lon], zoom: 11, zoomAnimation: false });
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '© CartoDB', maxZoom: 18,
+      }).addTo(map);
+      L.circleMarker([config.lat, config.lon], { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.9 })
+        .bindPopup('Launch Site').addTo(map);
+      landingLayer.current = L.layerGroup().addTo(map);
+      leafletMap.current = map;
+    };
+
+    // If already visible, init immediately
+    if (el.offsetParent !== null) {
+      initMap();
+    } else {
+      // Wait for container to become visible
+      const visObs = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          visObs.disconnect();
+          // Small delay to let layout settle
+          setTimeout(initMap, 50);
+        }
+      }, { threshold: 0 });
+      visObs.observe(el);
+      return () => visObs.disconnect();
+    }
+
+    return () => { if (leafletMap.current) { leafletMap.current.remove(); leafletMap.current = null; } };
   }, []);
+
+  // Resize map when container becomes visible (tab/page switch)
+  useEffect(() => {
+    const map = leafletMap.current;
+    const el = mapRef.current;
+    if (!map || !el) return;
+    const obs = new ResizeObserver(() => { map.invalidateSize(); });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [mcResult]);
 
   // Update landing scatter on map
   useEffect(() => {
@@ -92,6 +129,8 @@ export function MonteCarloTool({ result, config, unitSystem }: Props) {
         wind_speed_std_ms: windStd.toString(),
         mass_variation_pct: massPct.toString(),
         cd_variation_pct: cdPct.toString(),
+        use_live_weather: useLiveWeather.toString(),
+        ...(useLiveWeather ? { sim_datetime: weatherDateTime } : {}),
       });
       const response = await fetch(`/api/monte-carlo?${params}`, { method: 'POST', body: formData });
       if (!response.ok) {
@@ -161,6 +200,25 @@ export function MonteCarloTool({ result, config, unitSystem }: Props) {
           className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-lg transition-colors border border-gray-700">
           {orkFile ? `📄 ${orkFile.name}` : 'Select .ork file'}
         </button>
+      </div>
+
+      {/* Weather */}
+      <div className="flex items-start gap-3 text-xs">
+        <input id="mc-live-weather" type="checkbox" checked={useLiveWeather}
+          onChange={e => { const next = e.target.checked; setUseLiveWeather(next); if (next) setWeatherDateTime(nowRoundedLocalISO()); }}
+          className="mt-0.5 accent-blue-500" />
+        <div className="flex-1">
+          <label htmlFor="mc-live-weather" className="text-gray-300 cursor-pointer select-none">Use live weather (NOMADS GFS)</label>
+          {useLiveWeather && (
+            <div className="mt-2 space-y-1">
+              <label className="text-gray-400">Forecast date/time (local)</label>
+              <input type="datetime-local" value={weatherDateTime}
+                onChange={e => setWeatherDateTime(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:border-blue-500" />
+              <p className="text-gray-600">GFS runs every 6 h — fetches nearest 00/06/12/18 UTC run.</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Controls */}

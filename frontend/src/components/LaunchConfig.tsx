@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { UnitSystem } from './TimeSeriesCharts';
+import { nowRoundedLocalISO } from '../App';
 
 interface GeoResult {
   id: number;
@@ -319,7 +320,12 @@ export default function LaunchConfigForm({
           type="checkbox"
           checked={config.useLiveWeather}
           disabled={disabled}
-          onChange={(e) => onChange({ ...config, useLiveWeather: e.target.checked })}
+          onChange={(e) => {
+            const next = e.target.checked;
+            const update: Partial<LaunchConfig> = { useLiveWeather: next };
+            if (next) update.weatherDateTime = nowRoundedLocalISO();
+            onChange({ ...config, ...update });
+          }}
           className="mt-0.5 accent-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
         />
         <div className="flex-1">

@@ -1,8 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { HourlyLanding, Trajectory3D } from '../types';
 import type { WeatherData } from './WeatherPanel';
+
+interface Aircraft {
+  icao: string;
+  callsign: string;
+  lat: number;
+  lon: number;
+  alt_m: number;
+  velocity_ms: number;
+  heading: number;
+  on_ground: boolean;
+}
 
 interface Props {
   trajectory: Trajectory3D;
@@ -66,7 +77,6 @@ function predictLanding(
 
     const wsMs = ws * speedToMs;
     const wdRad = wd * Math.PI / 180;
-    // Meteorological convention: wind FROM wd → u (east) = -ws*sin(wd), v (north) = -ws*cos(wd)
     dx += -wsMs * Math.sin(wdRad) * dt;
     dy += -wsMs * Math.cos(wdRad) * dt;
   }
@@ -92,7 +102,6 @@ function enuToLatLon(
 }
 
 function altColor(frac: number): string {
-  // blue (low) → cyan → green → yellow → red (high)
   const stops: [number, [number, number, number]][] = [
     [0.00, [59, 130, 246]],
     [0.33, [34, 211, 238]],
@@ -132,6 +141,21 @@ function downloadKml(kmlData: string) {
   URL.revokeObjectURL(url);
 }
 
+function aircraftIcon(heading: number): L.DivIcon {
+  return L.divIcon({
+    className: '',
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
+             style="transform:rotate(${heading}deg)">
+             <polygon points="12,2 16,20 12,16 8,20" fill="#f59e0b" stroke="#92400e" stroke-width="1"/>
+           </svg>`,
+  });
+}
+
+const M_FT = 3.28084;
+const AC_REFRESH_MS = 120_000;
+
 export function TrajectoryMap({
   trajectory, launchLat, launchLon, launchElevationM,
   apogeeTimeS, burnOutTimeS, kmlData,
@@ -141,6 +165,39 @@ export function TrajectoryMap({
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const [showDrift, setShowDrift] = useState(true);
+  const [showAircraft, setShowAircraft] = useState(false);
+  const [aircraft, setAircraft] = useState<Aircraft[]>([]);
+
+  const fetchAircraft = useCallback(() => {
+    const d = 0.5;
+    const url = `/api/airspace/aircraft?lamin=${launchLat - d}&lomin=${launchLon - d}&lamax=${launchLat + d}&lomax=${launchLon + d}`;
+    fetch(url)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(j => {
+        const ac: Aircraft[] = (j.states ?? [])
+          .filter((s: any) => s[5] != null && s[6] != null)
+          .map((s: any) => ({
+            icao: s[0] as string,
+            callsign: (s[1] as string)?.trim() || s[0],
+            lon: s[5] as number,
+            lat: s[6] as number,
+            alt_m: (s[7] ?? s[13] ?? 0) as number,
+            velocity_ms: (s[9] ?? 0) as number,
+            heading: (s[10] ?? 0) as number,
+            on_ground: s[8] as boolean,
+          }))
+          .filter((a: Aircraft) => !a.on_ground);
+        setAircraft(ac);
+      })
+      .catch(() => setAircraft([]));
+  }, [launchLat, launchLon]);
+
+  useEffect(() => {
+    if (!showAircraft) { setAircraft([]); return; }
+    fetchAircraft();
+    const id = setInterval(fetchAircraft, AC_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [showAircraft, fetchAircraft]);
 
   useEffect(() => {
     if (!mapRef.current || trajectory.t.length === 0) return;
@@ -317,22 +374,53 @@ export function TrajectoryMap({
       }
     }
 
+    // ── Aircraft overlay ───────────────────────────────────────────────────────
+    if (showAircraft && aircraft.length > 0) {
+      const acGroup = L.layerGroup().addTo(map);
+      for (const ac of aircraft) {
+        const altFt = Math.round(ac.alt_m * M_FT);
+        const speedKt = Math.round(ac.velocity_ms * 1.94384);
+        L.marker([ac.lat, ac.lon], { icon: aircraftIcon(ac.heading) })
+          .bindPopup(
+            `<b>${ac.callsign}</b><br>` +
+            `Alt: ${altFt.toLocaleString()} ft<br>` +
+            `Speed: ${speedKt} kt<br>` +
+            `Hdg: ${Math.round(ac.heading)}°`
+          )
+          .addTo(acGroup);
+      }
+    }
+
     // Fit map to trajectory + all drift prediction bounds
     const bounds = L.latLngBounds(latLons);
     driftLatLons.forEach(ll => bounds.extend(ll));
+    if (showAircraft && aircraft.length > 0) {
+      for (const ac of aircraft) bounds.extend([ac.lat, ac.lon]);
+    }
     map.fitBounds(bounds, { padding: [40, 40] });
 
     return () => {
       map.remove();
       leafletMap.current = null;
     };
-  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, weatherIsImperial, launchDateTime, hourlyLandings]);
+  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, showAircraft, aircraft, weatherIsImperial, launchDateTime, hourlyLandings]);
 
   return (
     <div className="bg-gray-900 rounded-xl p-4">
       <div className="flex items-center justify-between mb-0.5">
         <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Map Trajectory</h2>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowAircraft(v => !v)}
+            className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+              showAircraft
+                ? 'bg-amber-600/20 border-amber-500/40 text-amber-300 hover:bg-amber-600/30'
+                : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-white'
+            }`}
+          >
+            {showAircraft ? 'Hide aircraft' : 'Show aircraft'}
+            {showAircraft && aircraft.length > 0 && <span className="ml-1.5 text-[10px] opacity-60">{aircraft.length}</span>}
+          </button>
           {(hourlyLandings?.length || weatherData) && (
             <button
               onClick={() => setShowDrift(v => !v)}
@@ -361,7 +449,8 @@ export function TrajectoryMap({
       </div>
       <p className="text-gray-600 text-xs mb-3">
         Satellite overlay · altitude color gradient (blue → red) · click markers for details
-        {showDrift && hourlyLandings?.length ? ' · colored dots = GFS landing prediction per 3-hour slot' : showDrift && weatherData ? ' · colored dots = predicted landing per forecast hour' : null}
+        {showAircraft ? ' · yellow planes = live aircraft' : null}
+        {showDrift && hourlyLandings?.length ? ' · colored dots = predicted landing per forecast hour' : showDrift && weatherData ? ' · colored dots = predicted landing per forecast hour' : null}
       </p>
       <div ref={mapRef} className="rounded-lg overflow-hidden" style={{ height: 480 }} />
       {/* Altitude legend */}

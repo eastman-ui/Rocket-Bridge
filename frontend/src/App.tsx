@@ -60,7 +60,7 @@ function EmptyResults() {
   );
 }
 
-function nowRoundedLocalISO() {
+export function nowRoundedLocalISO() {
   const d = new Date();
   if (d.getMinutes() >= 30) {
     d.setHours(d.getHours() + 1, 0, 0, 0);
@@ -110,7 +110,7 @@ function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function CachedBanner({ meta, onClear }: { meta: CacheMeta; onClear: () => void }) {
+function CachedBanner({ meta, stale, onClear }: { meta: CacheMeta; stale: boolean; onClear: () => void }) {
   return (
     <div className="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-gray-400">
       <svg className="w-3.5 h-3.5 text-gray-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -118,6 +118,7 @@ function CachedBanner({ meta, onClear }: { meta: CacheMeta; onClear: () => void 
         <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v5h5" />
       </svg>
       <span className="truncate">Cached · <span className="text-gray-300">{meta.filename}</span> · {timeAgo(meta.timestamp)}</span>
+      {stale && <span className="text-amber-400 font-medium shrink-0">Results may be outdated</span>}
       <button onClick={onClear} className="ml-auto shrink-0 text-gray-600 hover:text-gray-300 transition-colors">Clear</button>
     </div>
   );
@@ -140,17 +141,19 @@ export default function App() {
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [orRailLengthM, setOrRailLengthM] = useState<number | null>(null);
   const [cacheMeta, setCacheMeta] = useState<CacheMeta | null>(null);
+  const [resultsStale, setResultsStale] = useState(false);
   const [activePage, setActivePage] = useState<ActivePage>('main');
 
   useEffect(() => {
     const entry = loadCache();
     if (!entry) return;
     setResults(entry.results);
-    setConfig(entry.config);
+    setConfig({ ...entry.config, weatherDateTime: nowRoundedLocalISO() });
     const orRailLen = entry.results.or_results?.or_launch_rod_length_m ?? null;
     setOrRailLengthM(orRailLen);
     setAppState('results');
     setCacheMeta({ filename: entry.filename, timestamp: entry.timestamp, config: entry.config });
+    setResultsStale(Date.now() - entry.timestamp > 30 * 60_000);
   }, []);
 
   const handleSimulate = async () => {
@@ -160,6 +163,7 @@ export default function App() {
     setSimPct(5);
     setErrorMessage('');
     setCacheMeta(null);
+    setResultsStale(false);
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
@@ -330,6 +334,7 @@ export default function App() {
                 {cacheMeta && (
                   <CachedBanner
                     meta={cacheMeta}
+                    stale={resultsStale}
                     onClear={() => {
                       localStorage.removeItem(CACHE_KEY);
                       setCacheMeta(null);

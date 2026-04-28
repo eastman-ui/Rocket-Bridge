@@ -125,16 +125,9 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
 
   useEffect(() => { onWeatherData?.(data); }, [data, onWeatherData]);
 
-  // Auto-scroll launch hour into view when data loads or date changes
   useEffect(() => {
-    setSelectedHour(null); // reset selection when launch time changes
+    setSelectedHour(null);
   }, [launchDateTime]);
-
-  useEffect(() => {
-    if (launchSlotRef.current) {
-      launchSlotRef.current.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-    }
-  }, [data, launchDateTime]);
 
   if (!lat || !lon) return null;
 

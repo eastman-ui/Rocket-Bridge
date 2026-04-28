@@ -14,6 +14,9 @@ from fastapi.responses import StreamingResponse
 from converter import convert_ork, get_stored_results, validate_ork
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
+from sweep import run_sweep
+from motor_compare import compare_motors, search_motors
+from monte_carlo import run_monte_carlo
 from models import ComparisonResponse, HourlyLanding, ORResults, RocketParams, RocketPyResults, TimeSeriesData, Trajectory3D
 
 OR_JAR_PATH = os.getenv("OR_JAR_PATH", "./OpenRocket-23.09.jar")
@@ -287,3 +290,177 @@ async def simulate(
 # deleted in the finally block of /simulate before a follow-up request could
 # retrieve them. To support this endpoint, the simulation output would need to be
 # persisted to a stable location (e.g., keyed by a job ID) and served from there.
+
+
+# ─── Parameter Sweep ──────────────────────────────────────────────────────────
+
+@app.post("/sweep")
+async def sweep_endpoint(
+    file: UploadFile = File(...),
+    lat: float = Query(32.99),
+    lon: float = Query(-106.97),
+    elevation: float = Query(1400.0),
+    rail_length: float = Query(5.2),
+    inclination: float = Query(85.0),
+    heading: float = Query(0.0),
+    sweep_param: str = Query("inclination"),
+    sweep_min: float = Query(70.0),
+    sweep_max: float = Query(89.0),
+    sweep_steps: int = Query(10),
+):
+    if not file.filename or not file.filename.endswith(".ork"):
+        raise HTTPException(status_code=400, detail="File must be .ork")
+    contents = await file.read()
+    filename = file.filename
+
+    async def generate():
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            ork_path = os.path.join(tmp_dir, filename)
+            with open(ork_path, "wb") as f:
+                f.write(contents)
+            yield _sse("converting", 10)
+            params = await asyncio.to_thread(convert_ork, ork_path, tmp_dir)
+
+            completed = [0]
+            total = max(2, min(sweep_steps, 20))
+
+            async def progress(done: int, total_: int):
+                completed[0] = done
+                pct = int(10 + 85 * done / total_)
+                yield  # can't yield from callback — use event queue instead
+
+            yield _sse("simulating", 15, total=total)
+            results = await run_sweep(
+                params, lat, lon, elevation, rail_length, inclination, heading,
+                sweep_param, sweep_min, sweep_max, sweep_steps,  # type: ignore
+                _rocketpy_sem, tmp_dir,
+            )
+            yield _sse("done", 100, results=results)
+        except Exception as exc:
+            logger.exception("Sweep error")
+            yield _sse("error", 0, message=str(exc))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ─── Motor Search (ThrustCurve.org proxy) ─────────────────────────────────────
+
+@app.get("/motors/search")
+async def motor_search(q: str = Query(..., min_length=2)):
+    try:
+        results = await search_motors(q)
+        return {"results": results}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ─── Motor Comparison ─────────────────────────────────────────────────────────
+
+@app.post("/motors/compare")
+async def motor_compare_endpoint(
+    file: UploadFile = File(...),
+    lat: float = Query(32.99),
+    lon: float = Query(-106.97),
+    elevation: float = Query(1400.0),
+    rail_length: float = Query(5.2),
+    inclination: float = Query(85.0),
+    heading: float = Query(0.0),
+    motor_ids: str = Query(...),  # comma-separated motor IDs
+):
+    if not file.filename or not file.filename.endswith(".ork"):
+        raise HTTPException(status_code=400, detail="File must be .ork")
+    ids = [m.strip() for m in motor_ids.split(",") if m.strip()][:5]
+    if not ids:
+        raise HTTPException(status_code=400, detail="No motor IDs provided")
+    contents = await file.read()
+    filename = file.filename
+
+    async def generate():
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            ork_path = os.path.join(tmp_dir, filename)
+            with open(ork_path, "wb") as f:
+                f.write(contents)
+            yield _sse("converting", 10)
+            params = await asyncio.to_thread(convert_ork, ork_path, tmp_dir)
+            yield _sse("simulating", 20, total=len(ids))
+            results = await compare_motors(
+                params, ids, lat, lon, elevation, rail_length, inclination, heading,
+                _rocketpy_sem, tmp_dir,
+            )
+            yield _sse("done", 100, results=results)
+        except Exception as exc:
+            logger.exception("Motor compare error")
+            yield _sse("error", 0, message=str(exc))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ─── Monte Carlo ──────────────────────────────────────────────────────────────
+
+@app.post("/monte-carlo")
+async def monte_carlo_endpoint(
+    file: UploadFile = File(...),
+    lat: float = Query(32.99),
+    lon: float = Query(-106.97),
+    elevation: float = Query(1400.0),
+    rail_length: float = Query(5.2),
+    inclination: float = Query(85.0),
+    heading: float = Query(0.0),
+    n_sims: int = Query(50),
+    wind_speed_std_ms: float = Query(2.0),
+    mass_variation_pct: float = Query(2.0),
+    cd_variation_pct: float = Query(5.0),
+):
+    if not file.filename or not file.filename.endswith(".ork"):
+        raise HTTPException(status_code=400, detail="File must be .ork")
+    contents = await file.read()
+    filename = file.filename
+
+    async def generate():
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            ork_path = os.path.join(tmp_dir, filename)
+            with open(ork_path, "wb") as f:
+                f.write(contents)
+            yield _sse("converting", 5)
+            params = await asyncio.to_thread(convert_ork, ork_path, tmp_dir)
+            yield _sse("simulating", 10, total=n_sims)
+
+            completed = [0]
+
+            async def on_progress(done: int, total: int):
+                completed[0] = done
+                # Can't yield from async callback — progress tracked via heartbeat below
+
+            mc_task = asyncio.ensure_future(run_monte_carlo(
+                params, lat, lon, elevation, rail_length, inclination, heading,
+                n_sims, wind_speed_std_ms, mass_variation_pct, cd_variation_pct,
+                _rocketpy_sem, tmp_dir, on_progress,
+            ))
+
+            pct = 10
+            while not mc_task.done():
+                await asyncio.sleep(3)
+                if not mc_task.done():
+                    done = completed[0]
+                    pct = max(pct, int(10 + 85 * done / max(n_sims, 1)))
+                    yield _sse("simulating", min(pct, 95), done=done, total=n_sims)
+
+            result = mc_task.result()
+            yield _sse("done", 100, result=result)
+        except Exception as exc:
+            logger.exception("Monte Carlo error")
+            yield _sse("error", 0, message=str(exc))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

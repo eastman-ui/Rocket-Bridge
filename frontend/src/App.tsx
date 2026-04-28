@@ -9,10 +9,13 @@ import { OrientationRender } from './components/OrientationRender';
 import { RocketPanel } from './components/RocketPanel';
 import { HowToModal } from './components/HowToModal';
 import { WeatherPanel } from './components/WeatherPanel';
+import { ToolsPage } from './pages/ToolsPage';
 import type { WeatherData } from './components/WeatherPanel';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
 import type { ComparisonResponse } from './types';
+
+type ActivePage = 'main' | 'tools';
 
 
 const SIM_STAGE_LABELS: Record<string, string> = {
@@ -137,6 +140,7 @@ export default function App() {
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [orRailLengthM, setOrRailLengthM] = useState<number | null>(null);
   const [cacheMeta, setCacheMeta] = useState<CacheMeta | null>(null);
+  const [activePage, setActivePage] = useState<ActivePage>('main');
 
   useEffect(() => {
     const entry = loadCache();
@@ -233,6 +237,20 @@ export default function App() {
         <div className="flex items-center gap-3">
           <h1 className="text-base font-bold tracking-tight">RocketBridge</h1>
           <span className="text-gray-700 text-xs hidden sm:inline">OpenRocket → RocketPy</span>
+          {/* Page nav */}
+          <div className="flex items-center gap-0.5 bg-gray-900 rounded-lg px-1 py-1 border border-gray-800 ml-2">
+            {(['main', 'tools'] as ActivePage[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => setActivePage(p)}
+                className={`px-3 py-0.5 rounded text-xs font-medium transition-colors ${
+                  activePage === p ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'
+                }`}
+              >
+                {p === 'main' ? 'Simulation' : 'Tools'}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {/* Units toggle — always visible so weather panel reflects it */}
@@ -272,7 +290,11 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1">
+      {activePage === 'tools' && (
+        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} />
+      )}
+
+      <main className={`max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1 ${activePage !== 'main' ? 'hidden' : ''}`}>
         {/* Two-column: input left, results right */}
         <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-5 lg:items-stretch">
 

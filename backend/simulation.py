@@ -245,7 +245,10 @@ def _compute_hourly_landings(
         try:
             slot_env = Environment(latitude=lat, longitude=lon, elevation=elevation)
             slot_env.set_date((slot_dt.year, slot_dt.month, slot_dt.day, slot_dt.hour))
-            slot_env.set_atmospheric_model(type="Forecast", file="GFS")
+            import concurrent.futures as _cf
+            with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                _fut = _ex.submit(slot_env.set_atmospheric_model, type="Forecast", file="GFS")
+                _fut.result(timeout=30)
 
             p_lat, p_lon = apogee_lat, apogee_lon
             for i in range(len(desc_t) - 1):
@@ -317,7 +320,10 @@ def run_rocketpy(
             # Round down to nearest 6-hour GFS run (00/06/12/18 UTC)
             gfs_hour = (parsed.hour // 6) * 6
             env.set_date((parsed.year, parsed.month, parsed.day, gfs_hour))
-            env.set_atmospheric_model(type="Forecast", file="GFS")
+            import concurrent.futures as _cf
+            with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                _fut = _ex.submit(env.set_atmospheric_model, type="Forecast", file="GFS")
+                _fut.result(timeout=45)  # raise TimeoutError if NOMADS stalls
             # Sanity checks: pressure 50,000–120,000 Pa and temperature 220–320 K
             # (RocketPy NOMADS unit bug returns pressure 100× too high — catches it here)
             surface_pressure = env.pressure(elevation)

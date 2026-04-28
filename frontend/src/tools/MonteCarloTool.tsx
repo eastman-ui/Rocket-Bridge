@@ -42,7 +42,7 @@ export function MonteCarloTool({ result, config, unitSystem }: Props) {
   // Init map
   useEffect(() => {
     if (!mapRef.current || leafletMap.current) return;
-    const map = L.map(mapRef.current, { center: [config.lat, config.lon], zoom: 11 });
+    const map = L.map(mapRef.current, { center: [config.lat, config.lon], zoom: 11, zoomAnimation: false });
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '© CartoDB', maxZoom: 18,
     }).addTo(map);

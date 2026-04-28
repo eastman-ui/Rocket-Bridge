@@ -174,6 +174,7 @@ export function TrajectoryMap({
       center,
       zoom: 13,
       zoomControl: true,
+      zoomAnimation: false,
     });
     leafletMap.current = map;
 

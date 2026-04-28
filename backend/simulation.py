@@ -270,7 +270,8 @@ def _compute_hourly_landings(
             return None
 
     results = []
-    with ThreadPoolExecutor(max_workers=min(4, len(slots))) as executor:
+    # netCDF4/HDF5 is not thread-safe — serialize hourly landing predictions
+    with ThreadPoolExecutor(max_workers=1) as executor:
         for res in as_completed({executor.submit(_predict, s): s for s in slots}):
             r = res.result()
             if r:
@@ -729,21 +730,12 @@ def run_rocketpy(
         trajectory_3d = {"t": [], "x": [], "y": [], "z": [], "ux": [], "uy": [], "uz": []}
 
     # ------------------------------------------------------------------
-    # 8. Hourly landing predictions (GFS per 3-hour slot to end of UTC day)
+    # 8. Hourly landing predictions — disabled
+    # Each slot fetches GFS via netCDF4/HDF5, which is not thread-safe and
+    # conflicts with the JPype JVM in the same process.  Wind drift is
+    # already shown in the weather panel; skip the per-slot predictions.
     # ------------------------------------------------------------------
     hourly_landings: list = []
-    if use_live_weather and traj_t is not None and traj_z is not None and len(traj_t) > 1:
-        _ai = int(np.argmin(np.abs(traj_t - apogee_time_s)))
-        _apogee_lat = lat + float(traj_y[_ai]) / 111111.0
-        _apogee_lon = lon + float(traj_x[_ai]) / (111111.0 * math.cos(math.radians(lat)))
-        hourly_landings = _compute_hourly_landings(
-            lat=lat, lon=lon, elevation=elevation,
-            apogee_lat=_apogee_lat, apogee_lon=_apogee_lon,
-            traj_t=traj_t, traj_z=traj_z,
-            apogee_time_s=apogee_time_s,
-            sim_datetime=sim_datetime,
-        )
-        logger.info("hourly_landings computed: %d slots", len(hourly_landings))
 
     # ------------------------------------------------------------------
     # 9. KML export

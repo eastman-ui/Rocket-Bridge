@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -37,7 +38,8 @@ app.add_middleware(
 _result_cache: dict[str, dict] = {}
 _MAX_CACHE = 10
 
-# LSODA (scipy ODE solver used by RocketPy) is not thread-safe — serialize all RocketPy calls
+# LSODA (scipy ODE solver used by RocketPy) is not thread-safe — serialize RocketPy calls.
+# OR extraction now runs in a subprocess, so it doesn't conflict with RocketPy's netCDF4/HDF5.
 _rocketpy_sem = asyncio.Semaphore(1)
 
 
@@ -49,8 +51,21 @@ def _cache_put(key: str, value: dict) -> None:
 
 _SSE_PAD = ": " + " " * 1024 + "\n"  # 1KB SSE comment — forces TCP flush on small events
 
+def _sanitize_nan(obj):
+    """Replace NaN/Inf floats with None so json.dumps produces valid JSON."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
+
 def _sse(stage: str, pct: int, **extra) -> str:
-    payload = json.dumps({"stage": stage, "pct": pct, **extra})
+    payload = json.dumps(_sanitize_nan({"stage": stage, "pct": pct, **extra}))
     return f"{_SSE_PAD}data: {payload}\n\n"
 
 

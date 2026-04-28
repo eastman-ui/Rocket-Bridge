@@ -176,45 +176,58 @@ export default function App() {
           : {}),
       });
 
+      console.log('[simulate] starting fetch to /api/simulate');
       const response = await fetch(`/api/simulate?${params}`, {
         method: 'POST',
         body: formData,
       });
+      console.log('[simulate] response status:', response.status, 'headers:', Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({ detail: response.statusText }));
         throw new Error(body.detail ?? response.statusText);
       }
 
+      console.log('[simulate] starting reader');
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let chunkCount = 0;
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) { console.log('[simulate] reader done'); break; }
+        chunkCount++;
+        console.log('[simulate] chunk', chunkCount, 'bytes:', value?.length);
         buffer += decoder.decode(value, { stream: true });
         const parts = buffer.split('\n\n');
         buffer = parts.pop() ?? '';
+        console.log('[simulate] parts:', parts.length, 'buffer len:', buffer.length);
         for (const part of parts) {
+          console.log('[simulate] part:', part.slice(0, 100));
           for (const line of part.split('\n')) {
             if (!line.startsWith('data: ')) continue;
             let event: Record<string, unknown>;
-            try { event = JSON.parse(line.slice(6)); } catch { continue; }
+            try { event = JSON.parse(line.slice(6)); } catch (e) { console.error('[SSE] JSON.parse failed, line length:', line.length, 'error:', e, 'line preview:', line.slice(0, 200)); continue; }
             const stage = event.stage as string;
             const pct = event.pct as number;
+            console.log('[simulate] event:', stage, pct);
             if (stage === 'error') throw new Error((event.message as string) ?? 'Simulation failed');
             setSimStage(stage);
             setSimPct(pct);
             if (stage === 'done') {
+              console.log('[SSE done] event.keys=', Object.keys(event), 'result.type=', typeof event.result, 'result.keys=', event.result ? Object.keys(event.result) : 'N/A');
               const data = event.result as ComparisonResponse;
+              if (!data) { console.error('[SSE done] data is null/undefined'); throw new Error('No result in SSE done event'); }
               const orRailLen = data.or_results?.or_launch_rod_length_m ?? null;
               setOrRailLengthM(orRailLen);
               if (orRailLen != null) setConfig(prev => ({ ...prev, railLength: orRailLen }));
+              console.log('[SSE done] calling setResults');
               setResults(data);
               setAppState('results');
               saveCache(data, config, selectedFile.name);
               setCacheMeta({ filename: selectedFile.name, timestamp: Date.now(), config });
+              console.log('[SSE done] setResults complete');
             }
           }
         }

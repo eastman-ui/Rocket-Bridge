@@ -1,58 +1,117 @@
+import json
 import logging
+import multiprocessing
 import os
-import threading
+import sys
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# JPype / OpenRocket singleton
-#
-# jpype.shutdownJVM() must be called from the main thread (JPype 1.x restriction),
-# but extract_or_results() runs inside asyncio.to_thread() — a threadpool worker.
-# Fix: start the JVM once and keep it alive for the process lifetime.
-# Never call shutdownJVM; the OS reclaims the JVM when the process exits.
+# Subprocess isolation: JPype/JVM loads libhdf5, which is NOT thread-safe and
+# conflicts with RocketPy's netCDF4 (also uses libhdf5).  Running OR extraction
+# in a subprocess ensures the JVM's HDF5 state never overlaps with RocketPy's.
 # ---------------------------------------------------------------------------
 
-_or_lock = threading.Lock()
-_or_helper = None   # orhelper.Helper, reused across all calls
-_or_fdt = None      # orhelper.FlightDataType, cached after first import
 
-
-def _ensure_or_started(jar_path: str):
-    """Return a persistent orhelper.Helper, starting the JVM on first call."""
-    global _or_helper, _or_fdt
-    if _or_helper is not None:
-        return _or_helper, _or_fdt
-    with _or_lock:
-        if _or_helper is not None:
-            return _or_helper, _or_fdt
+def _run_in_subprocess(ork_path: str, jar_path: str, result_queue) -> None:
+    """Worker function executed in a subprocess.  Starts a fresh JVM, runs
+    OpenRocket extraction, puts the result dict on the queue, then exits
+    (which cleanly shuts down the JVM)."""
+    try:
         import jpype
         import orhelper
-        # Patch shutdownJVM to a no-op before __enter__ so the context manager
-        # cannot shut down the JVM from a worker thread on __exit__.
-        jpype.shutdownJVM = lambda: None
+
+        # Inside a subprocess we own the JVM — no need for singleton tricks.
         instance = orhelper.OpenRocketInstance(jar_path)
         instance.__enter__()
-        # Deliberately do NOT call instance.__exit__() — JVM stays alive.
-        _or_helper = orhelper.Helper(instance)
-        _or_fdt = orhelper.FlightDataType
-        logger.info("OpenRocket JVM started (persistent singleton).")
-    return _or_helper, _or_fdt
+        try:
+            orh = orhelper.Helper(instance)
+            fdt = orhelper.FlightDataType
 
+            logger.info("OR extract (subprocess): loading doc %s", ork_path)
+            doc = orh.load_doc(ork_path)
+            sim = doc.getSimulation(0)
+            logger.info("OR extract (subprocess): running simulation")
+            orh.run_simulation(sim)
+            logger.info("OR extract (subprocess): simulation done, fetching timeseries")
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+            variables = [
+                fdt.TYPE_TIME,
+                fdt.TYPE_ALTITUDE,
+                fdt.TYPE_VELOCITY_TOTAL,
+                fdt.TYPE_MACH_NUMBER,
+                fdt.TYPE_STABILITY,
+                fdt.TYPE_THRUST_FORCE,
+                fdt.TYPE_DRAG_COEFF,
+                fdt.TYPE_ACCELERATION_TOTAL,
+            ]
+            data = orh.get_timeseries(sim, variables)
+            logger.info("OR extract (subprocess): timeseries fetched, getting events")
 
-def _downsample(arr, max_pts: int = 500):
-    """Downsample a 1-D numpy array or list to at most max_pts points."""
-    arr = np.asarray(arr)
-    if len(arr) <= max_pts:
-        return arr.tolist()
-    step = max(1, len(arr) // max_pts)
-    return arr[::step].tolist()
+            time_arr = np.asarray(data[fdt.TYPE_TIME])
+            alt_arr = np.asarray(data[fdt.TYPE_ALTITUDE])
+            vel_arr = np.asarray(data[fdt.TYPE_VELOCITY_TOTAL])
+            mach_arr = np.asarray(data[fdt.TYPE_MACH_NUMBER])
+            stab_arr = np.asarray(data[fdt.TYPE_STABILITY])
+            thrust_arr = np.asarray(data[fdt.TYPE_THRUST_FORCE])
+            accel_arr = np.asarray(data[fdt.TYPE_ACCELERATION_TOTAL])
+
+            apogee_m_agl = float(np.max(alt_arr))
+            max_velocity_ms = float(np.max(vel_arr))
+            max_mach = float(np.max(mach_arr))
+            max_acceleration_ms2 = float(np.max(accel_arr))
+
+            apogee_idx = int(np.argmax(alt_arr))
+            time_to_apogee_s = float(time_arr[apogee_idx])
+            stability_margin_cal = float(stab_arr[0]) if len(stab_arr) > 0 else 0.0
+
+            events = orh.get_events(sim)
+            logger.info("OR extract (subprocess): events fetched (%d types)", len(events))
+            velocity_off_rail_ms = None
+
+            for event, times in events.items():
+                event_name = str(event).upper()
+                t_event = times[0]
+                if "LAUNCHROD" in event_name or "LAUNCH_ROD" in event_name or "RAIL" in event_name:
+                    if len(time_arr) > 0:
+                        velocity_off_rail_ms = float(np.interp(float(t_event), time_arr, vel_arr))
+                if "BURNOUT" in event_name:
+                    pass  # burnout_time_s not needed in subprocess result
+
+            if velocity_off_rail_ms is None and len(vel_arr) > 0:
+                velocity_off_rail_ms = float(vel_arr[0])
+
+            step = max(1, len(time_arr) // 500)
+            timeseries = {
+                "time": time_arr[::step].tolist(),
+                "altitude": alt_arr[::step].tolist(),
+                "velocity": vel_arr[::step].tolist(),
+                "mach": mach_arr[::step].tolist(),
+                "stability": stab_arr[::step].tolist(),
+                "thrust": thrust_arr[::step].tolist(),
+            }
+
+            result_queue.put({
+                "ok": True,
+                "data": {
+                    "apogee_m_agl": apogee_m_agl,
+                    "max_velocity_ms": max_velocity_ms,
+                    "max_mach": max_mach,
+                    "max_acceleration_ms2": max_acceleration_ms2,
+                    "time_to_apogee_s": time_to_apogee_s,
+                    "velocity_off_rail_ms": velocity_off_rail_ms,
+                    "stability_margin_cal": stability_margin_cal,
+                    "timeseries": timeseries,
+                },
+            })
+        finally:
+            instance.__exit__(None, None, None)
+
+    except Exception as exc:
+        logger.exception("OR extract (subprocess) failed: %s", exc)
+        result_queue.put({"ok": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -60,116 +119,36 @@ def _downsample(arr, max_pts: int = 500):
 # ---------------------------------------------------------------------------
 
 def extract_or_results(ork_path: str, jar_path: str) -> dict:
-    """Extract OR simulation results via orhelper/JPype. Returns scalar summary + timeseries.
+    """Extract OR simulation results in an isolated subprocess.
 
-    Args:
-        ork_path: Path to the .ork OpenRocket file.
-        jar_path: Path to the OpenRocket JAR (e.g. OpenRocket-15.03.jar).
-
-    Returns:
-        Dict with scalar flight summary values and a downsampled timeseries.
-
-    Raises:
-        FileNotFoundError: If ork_path or jar_path do not exist.
-        RuntimeError: If the simulation fails for any reason.
+    Running in a subprocess ensures the JPype/JVM (which loads libhdf5) never
+    coexists in the same process as RocketPy's netCDF4 (which also uses
+    libhdf5).  Without isolation, concurrent HDF5 access causes SIGSEGV.
     """
     if not os.path.exists(ork_path):
         raise FileNotFoundError(f"OpenRocket file not found: {ork_path}")
     if not os.path.exists(jar_path):
         raise FileNotFoundError(f"OpenRocket JAR not found at {jar_path}")
 
-    try:
-        orh, fdt = _ensure_or_started(jar_path)
-        doc = orh.load_doc(ork_path)
-        sim = doc.getSimulation(0)
-        orh.run_simulation(sim)
+    ctx = multiprocessing.get_context("spawn")
+    result_queue = ctx.Queue()
+    proc = ctx.Process(target=_run_in_subprocess, args=(ork_path, jar_path, result_queue))
+    proc.start()
+    proc.join(timeout=120)
 
-        # ------------------------------------------------------------------
-        # Timeseries extraction
-        # ------------------------------------------------------------------
-        variables = [
-            fdt.TYPE_TIME,
-            fdt.TYPE_ALTITUDE,
-            fdt.TYPE_VELOCITY_TOTAL,
-            fdt.TYPE_MACH_NUMBER,
-            fdt.TYPE_STABILITY,
-            fdt.TYPE_THRUST_FORCE,
-            fdt.TYPE_DRAG_COEFF,
-            fdt.TYPE_ACCELERATION_TOTAL,
-        ]
-        data = orh.get_timeseries(sim, variables)
+    if proc.is_alive():
+        logger.warning("OR extract subprocess timed out after 120s — killing")
+        proc.kill()
+        proc.join(timeout=5)
+        raise RuntimeError("OpenRocket extraction timed out after 120 seconds")
 
-        time_arr = np.asarray(data[fdt.TYPE_TIME])
-        alt_arr = np.asarray(data[fdt.TYPE_ALTITUDE])
-        vel_arr = np.asarray(data[fdt.TYPE_VELOCITY_TOTAL])
-        mach_arr = np.asarray(data[fdt.TYPE_MACH_NUMBER])
-        stab_arr = np.asarray(data[fdt.TYPE_STABILITY])
-        thrust_arr = np.asarray(data[fdt.TYPE_THRUST_FORCE])
-        accel_arr = np.asarray(data[fdt.TYPE_ACCELERATION_TOTAL])
+    result = result_queue.get_nowait()
 
-        # ------------------------------------------------------------------
-        # Scalar values
-        # ------------------------------------------------------------------
-        apogee_m_agl = float(np.max(alt_arr))
-        max_velocity_ms = float(np.max(vel_arr))
-        max_mach = float(np.max(mach_arr))
-        max_acceleration_ms2 = float(np.max(accel_arr))
-
-        apogee_idx = int(np.argmax(alt_arr))
-        time_to_apogee_s = float(time_arr[apogee_idx])
-        stability_margin_cal = float(stab_arr[0]) if len(stab_arr) > 0 else 0.0
-
-        # ------------------------------------------------------------------
-        # Events: burnout time, velocity off rail
-        # ------------------------------------------------------------------
-        events = orh.get_events(sim)
-        velocity_off_rail_ms = None
-        burnout_time_s = None
-
-        for event, times in events.items():
-            event_name = str(event).upper()
-            t_event = times[0]
-            if "LAUNCHROD" in event_name or "LAUNCH_ROD" in event_name or "RAIL" in event_name:
-                if len(time_arr) > 0:
-                    velocity_off_rail_ms = float(np.interp(float(t_event), time_arr, vel_arr))
-            if "BURNOUT" in event_name:
-                burnout_time_s = float(t_event)
-
-        if velocity_off_rail_ms is None and len(vel_arr) > 0:
-            velocity_off_rail_ms = float(vel_arr[0])
-
-        # ------------------------------------------------------------------
-        # Downsampled timeseries (max 500 points)
-        # ------------------------------------------------------------------
-        step = max(1, len(time_arr) // 500)
-        timeseries = {
-            "time": time_arr[::step].tolist(),
-            "altitude": alt_arr[::step].tolist(),
-            "velocity": vel_arr[::step].tolist(),
-            "mach": mach_arr[::step].tolist(),
-            "stability": stab_arr[::step].tolist(),
-            "thrust": thrust_arr[::step].tolist(),
-        }
-
-    except (FileNotFoundError, RuntimeError):
-        raise
-    except Exception as exc:
-        logger.exception("OpenRocket extraction failed: %s", exc)
-        raise RuntimeError(
-            f"OpenRocket simulation failed: {exc}. "
-            "Check that the JAR path is correct and the .ork file is valid."
-        ) from exc
-
-    return {
-        "apogee_m_agl": apogee_m_agl,
-        "max_velocity_ms": max_velocity_ms,
-        "max_mach": max_mach,
-        "max_acceleration_ms2": max_acceleration_ms2,
-        "time_to_apogee_s": time_to_apogee_s,
-        "velocity_off_rail_ms": velocity_off_rail_ms,
-        "stability_margin_cal": stability_margin_cal,
-        "timeseries": timeseries,
-    }
+    if result["ok"]:
+        logger.info("OR extract (subprocess): completed successfully")
+        return result["data"]
+    else:
+        raise RuntimeError(result["error"])
 
 
 def extract_or_results_from_stored(stored_results: dict) -> dict:
@@ -178,12 +157,6 @@ def extract_or_results_from_stored(stored_results: dict) -> dict:
     Used when orhelper/JPype is unavailable or the .ork live simulation fails.
     Returns the same shape as extract_or_results but with None for unknowns
     and no timeseries.
-
-    Args:
-        stored_results: Dict from parameters.json["stored_results"] (or similar).
-
-    Returns:
-        Dict matching the ORResults schema, with timeseries set to None.
     """
     def _find(d: dict, *candidates) -> float | None:
         """Case-insensitive key lookup across multiple candidate names."""

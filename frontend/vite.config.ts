@@ -14,8 +14,17 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: process.env.API_TARGET ?? 'http://localhost:8080',
+        target: process.env.API_TARGET ?? 'http://backend:8000',
         rewrite: (path) => path.replace(/^\/api/, ''),
+        configure: (proxy, _options) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            // Disable buffering for SSE
+            proxyRes.headers['x-accel-buffering'] = 'no';
+            proxyRes.headers['cache-control'] = 'no-cache';
+            proxyRes.headers['connection'] = 'keep-alive';
+            proxyRes.headers['transfer-encoding'] = 'chunked';
+          });
+        },
       }
     }
   }

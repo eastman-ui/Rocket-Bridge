@@ -558,10 +558,34 @@ def run_rocketpy(
     apogee_m_asl = float(flight.apogee)
     apogee_m_agl = apogee_m_asl - elevation
     apogee_time_s = float(flight.apogee_time)
-    max_speed_ms = float(flight.max_speed)
-    max_mach = float(flight.max_mach_number)
-    max_acceleration_ms2 = float(flight.max_acceleration)
-    out_of_rail_velocity = float(flight.out_of_rail_velocity)
+
+    def _safe_max(flight_prop, source_func=None) -> float:
+        """Extract scalar max, falling back to nanmax of raw source if spline has NaN."""
+        try:
+            v = float(flight_prop)
+            if np.isfinite(v):
+                return v
+        except Exception:
+            pass
+        if source_func is not None:
+            try:
+                _, vals = _source_cols(source_func)
+                finite = vals[np.isfinite(vals)]
+                if len(finite) > 0:
+                    return float(np.max(finite))
+            except Exception:
+                pass
+        return 0.0
+
+    max_speed_ms = _safe_max(flight.max_speed, flight.speed)
+    max_mach = _safe_max(flight.max_mach_number, flight.mach_number)
+    max_acceleration_ms2 = _safe_max(flight.max_acceleration)
+
+    try:
+        out_of_rail_velocity = float(flight.out_of_rail_velocity)
+    except Exception:
+        out_of_rail_velocity = 0.0
+
     burn_out_time_s = float(motor.burn_out_time)
 
     # Stability margin at rail departure (most meaningful launch metric)
@@ -590,8 +614,19 @@ def run_rocketpy(
     # 6. Timeseries (downsampled to ≤500 pts)
     # ------------------------------------------------------------------
     alt_t, alt_v = _source_cols(flight.altitude)
-    spd_t, spd_v = _source_cols(flight.speed)
-    mach_t, mach_v = _source_cols(flight.mach_number)
+    alt_v = np.nan_to_num(alt_v, nan=0.0, posinf=0.0, neginf=0.0)
+
+    try:
+        spd_t, spd_v = _source_cols(flight.speed)
+        spd_v = np.nan_to_num(spd_v, nan=0.0, posinf=0.0, neginf=0.0)
+    except Exception:
+        spd_t, spd_v = alt_t, np.zeros_like(alt_t)
+
+    try:
+        mach_t, mach_v = _source_cols(flight.mach_number)
+        mach_v = np.nan_to_num(mach_v, nan=0.0, posinf=0.0, neginf=0.0)
+    except Exception:
+        mach_t, mach_v = alt_t, np.zeros_like(alt_t)
 
     # Use altitude time axis as the canonical time vector
     time_arr = alt_t

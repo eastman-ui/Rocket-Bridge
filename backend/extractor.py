@@ -48,6 +48,7 @@ def extract_or_results(ork_path: str, jar_path: str) -> dict:
 
         with orhelper.OpenRocketInstance(jar_path) as instance:
             orh = orhelper.Helper(instance)
+            fdt = orhelper.FlightDataType
             doc = orh.load_doc(ork_path)
             sim = doc.getSimulation(0)
             orh.run_simulation(sim)
@@ -56,23 +57,23 @@ def extract_or_results(ork_path: str, jar_path: str) -> dict:
             # Timeseries extraction
             # ------------------------------------------------------------------
             variables = [
-                orh.ALTITUDE,
-                orh.VELOCITY_TOTAL,
-                orh.MACH_NUMBER,
-                orh.STABILITY_COEFFICIENT,
-                orh.THRUST,
-                orh.DRAG_COEFFICIENT,
-                orh.ACCELERATION_TOTAL,
+                fdt.TYPE_ALTITUDE,
+                fdt.TYPE_VELOCITY_TOTAL,
+                fdt.TYPE_MACH_NUMBER,
+                fdt.TYPE_STABILITY,
+                fdt.TYPE_THRUST_FORCE,
+                fdt.TYPE_DRAG_COEFF,
+                fdt.TYPE_ACCELERATION_TOTAL,
             ]
             data = orh.get_timeseries(sim, variables)
 
             time_arr = np.asarray(data["time"])
-            alt_arr = np.asarray(data[orh.ALTITUDE])
-            vel_arr = np.asarray(data[orh.VELOCITY_TOTAL])
-            mach_arr = np.asarray(data[orh.MACH_NUMBER])
-            stab_arr = np.asarray(data[orh.STABILITY_COEFFICIENT])
-            thrust_arr = np.asarray(data[orh.THRUST])
-            accel_arr = np.asarray(data[orh.ACCELERATION_TOTAL])
+            alt_arr = np.asarray(data[fdt.TYPE_ALTITUDE])
+            vel_arr = np.asarray(data[fdt.TYPE_VELOCITY_TOTAL])
+            mach_arr = np.asarray(data[fdt.TYPE_MACH_NUMBER])
+            stab_arr = np.asarray(data[fdt.TYPE_STABILITY])
+            thrust_arr = np.asarray(data[fdt.TYPE_THRUST_FORCE])
+            accel_arr = np.asarray(data[fdt.TYPE_ACCELERATION_TOTAL])
 
             # ------------------------------------------------------------------
             # Scalar values

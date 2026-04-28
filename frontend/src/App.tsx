@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import axios from 'axios';
+import { useState, useEffect } from 'react';
 import FileUpload from './components/FileUpload';
 import LaunchConfigForm from './components/LaunchConfig';
 import { ComparisonTable } from './components/ComparisonTable';
@@ -16,11 +15,27 @@ import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
 import type { ComparisonResponse } from './types';
 
 
-function LoadingSpinner() {
+const SIM_STAGE_LABELS: Record<string, string> = {
+  validating: 'Validating file…',
+  converting: 'Converting .ork to RocketPy…',
+  simulating: 'Running simulations…',
+  building: 'Building results…',
+  done: 'Complete',
+};
+
+function SimProgress({ stage, pct }: { stage: string; pct: number }) {
   return (
-    <div className="flex items-center gap-2.5 bg-gray-900 rounded-xl px-4 py-3">
-      <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin shrink-0" />
-      <p className="text-gray-400 text-sm">Running simulation… 15–30 s</p>
+    <div className="bg-gray-900 rounded-xl px-4 py-3 space-y-2">
+      <div className="flex items-center gap-2.5">
+        <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin shrink-0" />
+        <p className="text-gray-400 text-sm">{SIM_STAGE_LABELS[stage] ?? stage}</p>
+      </div>
+      <div className="w-full bg-gray-800 rounded-full h-1">
+        <div
+          className="bg-blue-500 h-1 rounded-full transition-all duration-700 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -42,8 +57,13 @@ function EmptyResults() {
   );
 }
 
-function nowLocalISO() {
+function nowRoundedLocalISO() {
   const d = new Date();
+  if (d.getMinutes() >= 30) {
+    d.setHours(d.getHours() + 1, 0, 0, 0);
+  } else {
+    d.setMinutes(0, 0, 0);
+  }
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
 }
@@ -56,8 +76,49 @@ const defaultConfig: LaunchConfig = {
   inclination: 85,
   heading: 0,
   useLiveWeather: false,
-  weatherDateTime: nowLocalISO(),
+  weatherDateTime: nowRoundedLocalISO(),
 };
+
+// ─── Result cache (localStorage) ─────────────────────────────────────────────
+const CACHE_KEY = 'rocketbridge_last_result';
+
+interface CacheMeta { filename: string; timestamp: number; config: LaunchConfig; }
+interface CacheEntry extends CacheMeta { results: ComparisonResponse; }
+
+function saveCache(results: ComparisonResponse, config: LaunchConfig, filename: string) {
+  try {
+    const entry: CacheEntry = { results, config, filename, timestamp: Date.now() };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(entry));
+  } catch { /* quota exceeded — silently skip */ }
+}
+
+function loadCache(): CacheEntry | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? (JSON.parse(raw) as CacheEntry) : null;
+  } catch { return null; }
+}
+
+function timeAgo(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function CachedBanner({ meta, onClear }: { meta: CacheMeta; onClear: () => void }) {
+  return (
+    <div className="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-gray-400">
+      <svg className="w-3.5 h-3.5 text-gray-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 1.1.9 2 2 2h12a2 2 0 002-2V9l-5-5H6a2 2 0 00-2 2z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v5h5" />
+      </svg>
+      <span className="truncate">Cached · <span className="text-gray-300">{meta.filename}</span> · {timeAgo(meta.timestamp)}</span>
+      <button onClick={onClear} className="ml-auto shrink-0 text-gray-600 hover:text-gray-300 transition-colors">Clear</button>
+    </div>
+  );
+}
 
 type AppState = 'idle' | 'simulating' | 'results' | 'error';
 
@@ -67,17 +128,34 @@ export default function App() {
   const [config, setConfig] = useState<LaunchConfig>(defaultConfig);
   const [results, setResults] = useState<ComparisonResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [simStage, setSimStage] = useState('');
+  const [simPct, setSimPct] = useState(0);
   const [unitSystem, setUnitSystem] = useState<UnitSystem>('imperial');
   const [stabilityUnit, setStabilityUnit] = useState<StabilityUnit>('cal');
   const [panelOpen, setPanelOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [orRailLengthM, setOrRailLengthM] = useState<number | null>(null);
+  const [cacheMeta, setCacheMeta] = useState<CacheMeta | null>(null);
+
+  useEffect(() => {
+    const entry = loadCache();
+    if (!entry) return;
+    setResults(entry.results);
+    setConfig(entry.config);
+    const orRailLen = entry.results.or_results?.or_launch_rod_length_m ?? null;
+    setOrRailLengthM(orRailLen);
+    setAppState('results');
+    setCacheMeta({ filename: entry.filename, timestamp: entry.timestamp, config: entry.config });
+  }, []);
 
   const handleSimulate = async () => {
     if (!selectedFile) return;
     setAppState('simulating');
+    setSimStage('validating');
+    setSimPct(5);
     setErrorMessage('');
+    setCacheMeta(null);
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
@@ -93,23 +171,52 @@ export default function App() {
           ? { sim_datetime: config.weatherDateTime }
           : {}),
       });
-      const response = await axios.post<ComparisonResponse>(
-        `/api/simulate?${params}`,
-        formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } },
-      );
-      const orRailLen = response.data.or_results?.or_launch_rod_length_m ?? null;
-      setOrRailLengthM(orRailLen);
-      if (orRailLen != null) {
-        setConfig(prev => ({ ...prev, railLength: orRailLen }));
+
+      const response = await fetch(`/api/simulate?${params}`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(body.detail ?? response.statusText);
       }
-      setResults(response.data);
-      setAppState('results');
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          for (const line of part.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            let event: Record<string, unknown>;
+            try { event = JSON.parse(line.slice(6)); } catch { continue; }
+            const stage = event.stage as string;
+            const pct = event.pct as number;
+            if (stage === 'error') throw new Error((event.message as string) ?? 'Simulation failed');
+            setSimStage(stage);
+            setSimPct(pct);
+            if (stage === 'done') {
+              const data = event.result as ComparisonResponse;
+              const orRailLen = data.or_results?.or_launch_rod_length_m ?? null;
+              setOrRailLengthM(orRailLen);
+              if (orRailLen != null) setConfig(prev => ({ ...prev, railLength: orRailLen }));
+              setResults(data);
+              setAppState('results');
+              saveCache(data, config, selectedFile.name);
+              setCacheMeta({ filename: selectedFile.name, timestamp: Date.now(), config });
+            }
+          }
+        }
+      }
     } catch (err) {
-      const msg = axios.isAxiosError(err)
-        ? (err.response?.data?.detail ?? err.message)
-        : String(err);
-      setErrorMessage(msg);
+      setErrorMessage(err instanceof Error ? err.message : String(err));
       setAppState('error');
     }
   };
@@ -167,7 +274,7 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1">
         {/* Two-column: input left, results right */}
-        <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 lg:items-stretch">
+        <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-5 lg:items-stretch">
 
           {/* LEFT — input */}
           <div className="space-y-3">
@@ -190,7 +297,7 @@ export default function App() {
             >
               {isSimulating ? 'Running…' : 'Run Simulation'}
             </button>
-            {appState === 'simulating' && <LoadingSpinner />}
+            {appState === 'simulating' && <SimProgress stage={simStage} pct={simPct} />}
             {appState === 'error' && <ErrorBox message={errorMessage} />}
           </div>
 
@@ -198,6 +305,17 @@ export default function App() {
           <div className="flex flex-col gap-3">
             {appState === 'results' && results && rpy && or_ ? (
               <>
+                {cacheMeta && (
+                  <CachedBanner
+                    meta={cacheMeta}
+                    onClear={() => {
+                      localStorage.removeItem(CACHE_KEY);
+                      setCacheMeta(null);
+                      setResults(null);
+                      setAppState('idle');
+                    }}
+                  />
+                )}
                 {/* Controls */}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-gray-600 bg-gray-900 rounded-lg px-2.5 py-1.5 border border-gray-800">
@@ -218,6 +336,16 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+
+                {/* Unsupported config warnings */}
+                {results.warnings && results.warnings.length > 0 && (
+                  <div className="bg-yellow-950 border border-yellow-700 rounded-xl p-3 space-y-1">
+                    <p className="text-xs text-yellow-400 uppercase tracking-wide font-semibold">Configuration Warnings</p>
+                    {results.warnings.map((w, i) => (
+                      <p key={i} className="text-xs text-yellow-300">{w}</p>
+                    ))}
+                  </div>
+                )}
 
                 {/* Rocket diagram */}
                 {results.rocket_diagram && (

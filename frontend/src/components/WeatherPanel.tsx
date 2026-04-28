@@ -343,7 +343,7 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
         <p className="text-xs text-gray-600 mb-1 uppercase tracking-wide font-medium">
           Wind Aloft &amp; Clouds — {activeHour.replace('T', ' ')} local · click hour below to update
         </p>
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_220px] gap-3 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3 items-start">
           {/* Wind chart */}
           <div>
             <Plot
@@ -397,7 +397,7 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
                         <td className="px-3 py-1 text-right">
                           {pct > 0 ? (
                             <div className="flex items-center justify-end gap-1.5">
-                              <div className="w-12 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                              <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
                                 <div
                                   className="h-full rounded-full"
                                   style={{

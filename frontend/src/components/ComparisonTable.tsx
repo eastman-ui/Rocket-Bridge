@@ -19,6 +19,21 @@ interface MetricRow {
   rocketPyVal: number;
   unit: string;
   decimals?: number;
+  tooltip?: string;
+}
+
+function InfoTooltip({ text }: { text: string }) {
+  return (
+    <span className="relative group inline-flex items-center ml-1 align-middle">
+      <svg className="w-3 h-3 text-gray-600 group-hover:text-gray-400 cursor-help transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <circle cx="12" cy="12" r="10" />
+        <path strokeLinecap="round" d="M12 16v-4M12 8h.01" />
+      </svg>
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 text-xs bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-2 text-gray-300 invisible group-hover:visible z-20 shadow-xl leading-relaxed whitespace-normal">
+        {text}
+      </span>
+    </span>
+  );
 }
 
 export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabilityUnit, className = '' }: ComparisonTableProps) {
@@ -130,6 +145,7 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
       rocketPyVal: stabVal(rocketPyResults.static_margin_cal, rocketPyResults.static_margin_pct) ?? 0,
       unit: stabUnit,
       decimals: 2,
+      tooltip: 'OR and RocketPy use different Barrowman implementations with different correction factors, so stability margins commonly diverge. OR reports stability at the first simulation timestep; RocketPy reports at rail departure.',
     },
     {
       name: 'Burn Time',
@@ -198,9 +214,9 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
           <thead>
             <tr className="text-gray-500 text-xs uppercase border-b border-gray-700">
               <th className="pb-1.5 text-left font-semibold">Metric</th>
-              <th className="pb-1.5 px-3 text-right font-semibold">OpenRocket</th>
-              <th className="pb-1.5 px-3 text-right font-semibold">RocketPy</th>
-              <th className="pb-1.5 text-right font-semibold">Δ</th>
+              <th className="pb-1.5 px-5 text-right font-semibold">OpenRocket</th>
+              <th className="pb-1.5 px-5 text-right font-semibold">RocketPy</th>
+              <th className="pb-1.5 pl-5 text-right font-semibold">Δ</th>
             </tr>
           </thead>
           <tbody>
@@ -211,12 +227,13 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
                   <td className="py-1 text-left text-gray-300 text-xs">
                     {m.name}
                     <span className="text-gray-600 ml-1">({m.unit})</span>
+                    {m.tooltip && <InfoTooltip text={m.tooltip} />}
                   </td>
-                  <td className={`py-1 px-3 text-right font-mono text-xs ${m.orVal === undefined ? 'text-gray-600' : 'text-gray-300'}`}>
+                  <td className={`py-1 px-5 text-right font-mono text-xs ${m.orVal === undefined ? 'text-gray-600' : 'text-gray-300'}`}>
                     {fmt(m.orVal, m.decimals)}
                   </td>
-                  <td className="py-1 px-3 text-right font-mono text-xs text-gray-200">{fmt(m.rocketPyVal, m.decimals)}</td>
-                  <td className={`py-1 text-right font-mono text-xs font-semibold ${deltaColor(d)}`}>{fmtDelta(d)}</td>
+                  <td className="py-1 px-5 text-right font-mono text-xs text-gray-200">{fmt(m.rocketPyVal, m.decimals)}</td>
+                  <td className={`py-1 pl-5 text-right font-mono text-xs font-semibold ${deltaColor(d)}`}>{fmtDelta(d)}</td>
                 </tr>
               );
             })}

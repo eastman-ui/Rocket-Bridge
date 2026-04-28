@@ -202,24 +202,60 @@ def _inject_freeform_fins(ork_path: str, params: dict) -> None:
             with open(ork_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
 
-        fin_sections = re.findall(
+        fin_iters = list(re.finditer(
             r"<freeformfinset>(.*?)</freeformfinset>", content, re.DOTALL | re.IGNORECASE
-        )
-        if not fin_sections:
+        ))
+        if not fin_iters:
             return
 
+        # Build body-tube position table (same approach as _fix_trap_fin_positions_from_ork)
+        nc_m = re.search(r'<nosecone>.*?<length>([\d.eE+\-]+)</length>', content, re.DOTALL | re.IGNORECASE)
+        nc_len = float(nc_m.group(1)) if nc_m else 0.0
+        bt_data: list[tuple[int, int, float]] = []  # (xml_start, xml_end, length)
+        for bm in re.finditer(r'<bodytube>(.*?)</bodytube>', content, re.DOTALL | re.IGNORECASE):
+            ln_m = re.search(r'<length>([\d.eE+\-]+)</length>', bm.group(1), re.IGNORECASE)
+            if ln_m:
+                bt_data.append((bm.start(), bm.end(), float(ln_m.group(1))))
+
         trapezoidal_fins = {}
-        for i, section in enumerate(fin_sections):
+        for i, fin_m in enumerate(fin_iters):
+            section = fin_m.group(1)
+            fin_xml_start = fin_m.start()
+
             # fin count
             fc_match = re.search(r"<fincount>(\d+)</fincount>", section, re.IGNORECASE)
             n = int(fc_match.group(1)) if fc_match else 4
 
-            # axial position (leading edge of root from nose)
-            pos_match = re.search(
-                r'<position[^>]*type=["\']absolute["\'][^>]*>([\d.eE+\-]+)</position>',
-                section, re.IGNORECASE
-            ) or re.search(r"<axialoffset[^>]*>([\d.eE+\-]+)</axialoffset>", section, re.IGNORECASE)
-            position = float(pos_match.group(1)) if pos_match else 0.0
+            # axial offset: extract both method and value
+            ao_m = re.search(
+                r'<axialoffset\s+method="([^"]+)"\s*>([\d.eE+\-]+)</axialoffset>',
+                section, re.IGNORECASE,
+            ) or re.search(
+                r'<position\s+type="([^"]+)"\s*>([\d.eE+\-]+)</position>',
+                section, re.IGNORECASE,
+            )
+            ao_method = ao_m.group(1).lower() if ao_m else "absolute"
+            ao_value = float(ao_m.group(2)) if ao_m else 0.0
+
+            # Compute absolute LE position using parent body-tube context
+            if ao_method in ("absolute",):
+                position = ao_value
+            else:
+                # Find enclosing body tube
+                parent_idx = -1
+                for j, (bt_start, bt_end, _) in enumerate(bt_data):
+                    if bt_start < fin_xml_start < bt_end:
+                        parent_idx = j
+                if parent_idx >= 0:
+                    parent_aft = nc_len + sum(bt_data[k][2] for k in range(parent_idx + 1))
+                    parent_start = parent_aft - bt_data[parent_idx][2]
+                    if ao_method in ("bottom", "after"):
+                        # placeholder — root_chord not yet known; store raw, fix after geometry parsed
+                        position = None  # resolved below after root_chord computed
+                    else:
+                        position = parent_start + ao_value
+                else:
+                    position = ao_value
 
             # fin points: (x=axial, y=radial)
             pts = re.findall(r'<point\s+x="([\d.eE+\-]+)"\s+y="([\d.eE+\-]+)"', section, re.IGNORECASE)
@@ -235,6 +271,10 @@ def _inject_freeform_fins(ork_path: str, params: dict) -> None:
                 root_chord = root_xs[-1] - root_xs[0]
             else:
                 root_chord = max(xs)
+
+            # Resolve deferred "bottom" position now that root_chord is known
+            if position is None:
+                position = max(0.0, parent_aft - ao_value - root_chord)
 
             # Span: maximum radial extent
             span = max(ys)
@@ -261,7 +301,7 @@ def _inject_freeform_fins(ork_path: str, params: dict) -> None:
                 "root_chord": round(root_chord, 6),
                 "tip_chord": round(tip_chord, 6),
                 "span": round(span, 6),
-                "position": round(position, 6),
+                "position": round(position or 0.0, 6),
                 "sweep_length": round(sweep_length, 6),
             }
 
@@ -580,6 +620,69 @@ def _fix_rocket_mass(params: dict) -> None:
         )
     except Exception as exc:
         logger.warning("_fix_rocket_mass: failed (%s)", exc)
+
+
+def validate_ork(ork_path: str) -> list[str]:
+    """Inspect .ork XML and return human-readable warnings for unsupported configurations.
+
+    Returns an empty list when the file looks fully supported.
+    Never raises — validation failures become warnings themselves.
+    """
+    warnings: list[str] = []
+    try:
+        import xml.etree.ElementTree as ET
+        xml_text = _read_ork_xml(ork_path)
+        root = ET.fromstring(xml_text)
+
+        rocket = root.find("rocket")
+        if rocket is None:
+            warnings.append("No <rocket> element found — file may be corrupt or unsupported.")
+            return warnings
+
+        # Multi-stage detection
+        subs = rocket.find("subcomponents")
+        stages = subs.findall("stage") if subs is not None else []
+        if len(stages) > 1:
+            warnings.append(
+                f"Multi-stage rocket detected ({len(stages)} stages). "
+                "Only the first stage is simulated; upper-stage results will be inaccurate."
+            )
+
+        # Clustered motor detection
+        for innertube in root.iter("innertube"):
+            cluster_cfg = innertube.findtext("clusterconfiguration", "single").strip().lower()
+            if cluster_cfg not in ("", "single"):
+                warnings.append(
+                    f"Clustered motor mount detected (configuration: '{cluster_cfg}'). "
+                    "Only the first motor is used; cluster thrust will be underestimated."
+                )
+                break
+
+        # Pods / external components
+        if list(root.iter("podset")):
+            warnings.append(
+                "Rocket has pod(s) / external components. "
+                "Pods are not exported by rocketserializer and will be ignored in simulation."
+            )
+
+        # No saved simulation data
+        sims = list(root.iter("simulation"))
+        flight_data = list(root.iter("flightdata"))
+        if sims and not flight_data:
+            warnings.append(
+                "No OpenRocket simulation results saved in this file. "
+                "OR comparison data will be unavailable — only RocketPy results shown."
+            )
+
+        # No motor
+        motors = list(root.iter("motor"))
+        if not motors:
+            warnings.append("No motor found in the .ork file. Simulation may fail or produce zero thrust.")
+
+    except Exception as exc:
+        warnings.append(f"Could not fully validate .ork file: {exc}")
+
+    return warnings
 
 
 def get_stored_results(params: dict) -> dict:

@@ -256,27 +256,40 @@ export default function LaunchConfigForm({
           scale={imp ? M_FT : 1}
         />
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-1.5">
-            <label className="text-sm text-gray-400">
-              Rail Length
-              <span className="ml-1 text-gray-500">{imp ? 'ft' : 'm'}</span>
-            </label>
-            {orRailLengthM != null && Math.abs(config.railLength - orRailLengthM) < 0.001 && (
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 border border-blue-700/50">
-                from OR file
-              </span>
-            )}
-          </div>
-          <input
-            type="number"
-            value={parseFloat((config.railLength * (imp ? M_FT : 1)).toFixed(imp ? 1 : 3))}
-            step={imp ? 0.5 : 0.1}
-            disabled={disabled}
-            onChange={(e) =>
-              onChange({ ...config, railLength: parseFloat(e.target.value) / (imp ? M_FT : 1) })
-            }
-            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
-          />
+          {(() => {
+            const isImported = orRailLengthM != null && Math.abs(config.railLength - orRailLengthM) < 0.001;
+            return (
+              <>
+                <div className="flex items-center gap-1">
+                  <label className={`text-sm ${isImported ? 'text-blue-400' : 'text-gray-400'}`}>
+                    Rail Length
+                    <span className={`ml-1 ${isImported ? 'text-blue-500' : 'text-gray-500'}`}>{imp ? 'ft' : 'm'}</span>
+                  </label>
+                  {isImported && (
+                    <span className="relative group inline-flex items-center">
+                      <svg className="w-3 h-3 text-blue-500 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <circle cx="12" cy="12" r="10" />
+                        <path strokeLinecap="round" d="M12 16v-4M12 8h.01" />
+                      </svg>
+                      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 text-xs bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-2 text-gray-300 invisible group-hover:visible z-20 shadow-xl leading-relaxed whitespace-normal">
+                        Imported from .ork file
+                      </span>
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="number"
+                  value={parseFloat((config.railLength * (imp ? M_FT : 1)).toFixed(imp ? 1 : 3))}
+                  step={imp ? 0.5 : 0.1}
+                  disabled={disabled}
+                  onChange={(e) =>
+                    onChange({ ...config, railLength: parseFloat(e.target.value) / (imp ? M_FT : 1) })
+                  }
+                  className={`bg-gray-800 border rounded-lg px-3 py-2 text-white text-sm focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed ${isImported ? 'border-blue-700 focus:border-blue-400' : 'border-gray-700 focus:border-blue-500'}`}
+                />
+              </>
+            );
+          })()}
         </div>
         <Field
           label="Inclination"

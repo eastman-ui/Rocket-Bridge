@@ -71,3 +71,4 @@ class ComparisonResponse(BaseModel):
     rocket_params: Optional[RocketParams] = None
     rocket_diagram: Optional[str] = None
     hourly_landings: list[HourlyLanding] = []
+    warnings: list[str] = []

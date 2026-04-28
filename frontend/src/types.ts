@@ -74,4 +74,5 @@ export interface ComparisonResponse {
   rocket_params?: RocketParams;
   rocket_diagram?: string;
   hourly_landings?: HourlyLanding[];
+  warnings?: string[];
 }

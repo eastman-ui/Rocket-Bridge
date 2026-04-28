@@ -1,5 +1,6 @@
 """Motor comparison: fetch motors from ThrustCurve.org and compare performance."""
 import asyncio
+import base64
 import copy
 import logging
 import os
@@ -19,7 +20,7 @@ THRUSTCURVE_DOWNLOAD = "https://www.thrustcurve.org/api/v1/download.json"
 async def search_motors(query: str, limit: int = 8) -> list[dict]:
     """Search ThrustCurve.org for motors matching query string."""
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(THRUSTCURVE_SEARCH, params={"designation": query, "maxResults": limit})
+        r = await client.get(THRUSTCURVE_SEARCH, params={"commonName": query, "maxResults": limit})
         r.raise_for_status()
         data = r.json()
         return [
@@ -38,18 +39,22 @@ async def search_motors(query: str, limit: int = 8) -> list[dict]:
 async def _fetch_rasp(motor_id: str) -> Optional[str]:
     """Download RASP .eng content for a motor from ThrustCurve.org."""
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(
+        r = await client.get(
             THRUSTCURVE_DOWNLOAD,
-            json={"motorIds": [motor_id], "data": "RASP"},
+            params={"motorId": motor_id, "format": "RASP"},
         )
         r.raise_for_status()
         results = r.json().get("results", [])
         if not results:
             return None
-        files = results[0].get("files", [])
-        if not files:
+        raw = results[0].get("data")
+        if not raw:
             return None
-        return files[0].get("data")
+        # ThrustCurve returns base64-encoded file content
+        try:
+            return base64.b64decode(raw).decode("latin-1")
+        except Exception:
+            return raw  # already plain text
 
 
 async def compare_motors(

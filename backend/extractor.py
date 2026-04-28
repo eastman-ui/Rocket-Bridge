@@ -126,8 +126,9 @@ def extract_or_results(ork_path: str, jar_path: str) -> dict:
         velocity_off_rail_ms = None
         burnout_time_s = None
 
-        for event, t_event in events:
+        for event, times in events.items():
             event_name = str(event).upper()
+            t_event = times[0]
             if "LAUNCHROD" in event_name or "LAUNCH_ROD" in event_name or "RAIL" in event_name:
                 if len(time_arr) > 0:
                     velocity_off_rail_ms = float(np.interp(float(t_event), time_arr, vel_arr))

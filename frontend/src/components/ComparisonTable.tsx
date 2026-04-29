@@ -141,11 +141,11 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
     },
     {
       name: 'Stability Margin',
-      orVal: stabVal(orResults.stability_margin_cal, undefined),
-      rocketPyVal: stabVal(rocketPyResults.static_margin_cal, rocketPyResults.static_margin_pct) ?? 0,
+      orVal: stabVal(orResults.stability_margin_mach03_cal, undefined),
+      rocketPyVal: stabVal(rocketPyResults.static_margin_mach03_cal, rocketPyResults.static_margin_mach03_pct) ?? 0,
       unit: stabUnit,
       decimals: 2,
-      tooltip: 'OR and RocketPy use different Barrowman implementations with different correction factors, so stability margins commonly diverge. OR reports stability at the first simulation timestep; RocketPy reports at rail departure.',
+      tooltip: 'Measured at Mach 0.3 for consistent comparison between simulators. OR reports at first timestep and RocketPy at rail departure — different flight conditions.',
     },
     {
       name: 'Burn Time',

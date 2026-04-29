@@ -71,6 +71,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   const [altFilter, setAltFilter] = useState<[number, number]>([0, 18000]); // meters
   const [localLat, setLocalLat] = useState(config.lat);
   const [localLon, setLocalLon] = useState(config.lon);
+  const [mapReady, setMapReady] = useState(false);
 
   // Sync with launch config when it changes (e.g., cache restore)
   useEffect(() => {
@@ -150,6 +151,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   useEffect(() => {
     const el = mapRef.current;
     if (!el) return;
+    let observer: IntersectionObserver | null = null;
 
     const initMap = () => {
       if (leafletMap.current || !el) return;
@@ -164,22 +166,27 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
       acLayerRef.current = L.layerGroup().addTo(map);
       notamLayerRef.current = L.layerGroup().addTo(map);
       leafletMap.current = map;
+      setMapReady(true);
     };
 
     if (el.offsetParent !== null) {
       initMap();
     } else {
-      const visObs = new IntersectionObserver((entries) => {
+      observer = new IntersectionObserver((entries) => {
         if (entries[0].isIntersecting) {
-          visObs.disconnect();
+          observer?.disconnect();
+          observer = null;
           setTimeout(initMap, 50);
         }
       }, { threshold: 0 });
-      visObs.observe(el);
-      return () => visObs.disconnect();
+      observer.observe(el);
     }
 
-    return () => { if (leafletMap.current) { leafletMap.current.remove(); leafletMap.current = null; } };
+    return () => {
+      observer?.disconnect();
+      if (leafletMap.current) { leafletMap.current.remove(); leafletMap.current = null; }
+      setMapReady(false);
+    };
   }, []);
 
   // Resize map when container becomes visible (tab/page switch)
@@ -217,7 +224,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
         .bindPopup(`<b>${ac.callsign}</b><br>Alt: ${altDisp}<br>Speed: ${spdDisp}<br>Heading: ${ac.heading}°`);
       layer.addLayer(m);
     });
-  }, [aircraft, showAc, imp]);
+  }, [aircraft, showAc, imp, mapReady]);
 
   // Update NOTAM layer
   useEffect(() => {
@@ -233,13 +240,13 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
         }).bindPopup(`<b>${n.notamID}</b><br>${(n.text ?? '').slice(0, 200)}`).addLayer(layer);
       }
     });
-  }, [notams, showNotam]);
+  }, [notams, showNotam, mapReady]);
 
-  // Initial fetch + countdown
+  // Initial fetch + re-fetch when location or radius changes
   useEffect(() => {
     fetchAircraft();
     fetchNotams();
-  }, [radius, altFilter[0], altFilter[1]]);
+  }, [radius, altFilter[0], altFilter[1], localLat, localLon]);
 
   useEffect(() => {
     const interval = setInterval(() => {

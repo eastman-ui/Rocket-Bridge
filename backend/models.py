@@ -26,6 +26,7 @@ class ORResults(BaseModel):
     time_to_apogee_s: Optional[float] = None
     velocity_off_rail_ms: Optional[float] = None
     stability_margin_cal: Optional[float] = None
+    stability_margin_mach03_cal: Optional[float] = None
     timeseries: Optional[TimeSeriesData] = None
     or_launch_rod_length_m: Optional[float] = None
 
@@ -39,6 +40,8 @@ class RocketPyResults(BaseModel):
     out_of_rail_velocity: float
     static_margin_cal: float
     static_margin_pct: float
+    static_margin_mach03_cal: float = 0.0
+    static_margin_mach03_pct: float = 0.0
     burn_out_time_s: float
     weather_source: str = "standard_atmosphere"
     timeseries: TimeSeriesData

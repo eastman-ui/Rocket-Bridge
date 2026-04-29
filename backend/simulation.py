@@ -771,6 +771,24 @@ def run_rocketpy(
     except Exception:
         stab_v = np.full(n, static_margin_cal)
 
+    # Stability at Mach 0.3 — fair comparison point between simulators
+    static_margin_mach03_cal = 0.0
+    static_margin_mach03_pct = 0.0
+    try:
+        valid = ~np.isnan(stab_v) & ~np.isnan(mach_resampled) & (mach_resampled > 0)
+        if np.any(valid):
+            mv, sv = mach_resampled[valid], stab_v[valid]
+            order = np.argsort(mv)
+            mv, sv = mv[order], sv[order]
+            if mv[0] <= 0.3 <= mv[-1]:
+                sm03 = float(np.interp(0.3, mv, sv))
+                if not np.isnan(sm03):
+                    static_margin_mach03_cal = sm03
+                    if rocket_length > 0 and reference_diameter > 0:
+                        static_margin_mach03_pct = sm03 * reference_diameter / rocket_length * 100.0
+    except Exception:
+        pass
+
     # Build downsampled lists
     step = max(1, n // 500)
     idx = np.arange(0, n, step)
@@ -880,6 +898,8 @@ def run_rocketpy(
         "out_of_rail_velocity": out_of_rail_velocity,
         "static_margin_cal": static_margin_cal,
         "static_margin_pct": static_margin_pct,
+        "static_margin_mach03_cal": static_margin_mach03_cal,
+        "static_margin_mach03_pct": static_margin_mach03_pct,
         "burn_out_time_s": burn_out_time_s,
         "timeseries": timeseries,
         "trajectory_3d": trajectory_3d,

@@ -25,6 +25,7 @@ export interface ORResults {
   time_to_apogee_s?: number;
   velocity_off_rail_ms?: number;
   stability_margin_cal?: number;
+  stability_margin_mach03_cal?: number;
   timeseries?: TimeSeriesData;
   or_launch_rod_length_m?: number;
 }
@@ -39,6 +40,8 @@ export interface RocketPyResults {
   out_of_rail_velocity: number;
   static_margin_cal: number;
   static_margin_pct: number;
+  static_margin_mach03_cal: number;
+  static_margin_mach03_pct: number;
   burn_out_time_s: number;
   weather_source: string;
   timeseries: TimeSeriesData;

@@ -152,6 +152,7 @@ def _build_response(
         time_to_apogee_s=or_results_raw.get("time_to_apogee_s"),
         velocity_off_rail_ms=or_results_raw.get("velocity_off_rail_ms"),
         stability_margin_cal=or_results_raw.get("stability_margin_cal"),
+        stability_margin_mach03_cal=or_results_raw.get("stability_margin_mach03_cal"),
         timeseries=timeseries_or,
         or_launch_rod_length_m=or_results_raw.get("or_launch_rod_length_m"),
     )
@@ -166,6 +167,8 @@ def _build_response(
         out_of_rail_velocity=rocketpy_raw["out_of_rail_velocity"],
         static_margin_cal=rocketpy_raw["static_margin_cal"],
         static_margin_pct=rocketpy_raw["static_margin_pct"],
+        static_margin_mach03_cal=rocketpy_raw.get("static_margin_mach03_cal", 0.0),
+        static_margin_mach03_pct=rocketpy_raw.get("static_margin_mach03_pct", 0.0),
         burn_out_time_s=rocketpy_raw["burn_out_time_s"],
         weather_source=rocketpy_raw["weather_source"],
         timeseries=TimeSeriesData(**rocketpy_raw["timeseries"]),

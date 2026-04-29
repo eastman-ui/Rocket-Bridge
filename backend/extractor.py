@@ -65,7 +65,21 @@ def _run_in_subprocess(ork_path: str, jar_path: str, result_queue) -> None:
 
             apogee_idx = int(np.argmax(alt_arr))
             time_to_apogee_s = float(time_arr[apogee_idx])
-            stability_margin_cal = float(stab_arr[0]) if len(stab_arr) > 0 else 0.0
+            # First timestep is often NaN (before aerodynamic calc), skip to first valid value
+            non_nan_stab = stab_arr[~np.isnan(stab_arr)]
+            stability_margin_cal = float(non_nan_stab[0]) if len(non_nan_stab) > 0 else 0.0
+
+            # Stability at Mach 0.3 — fair comparison point between simulators
+            stability_margin_mach03_cal = None
+            if len(mach_arr) > 0 and len(stab_arr) > 0:
+                valid = ~np.isnan(stab_arr) & ~np.isnan(mach_arr)
+                if np.any(valid):
+                    mv, sv = mach_arr[valid], stab_arr[valid]
+                    # Need monotonically increasing mach for interp; sort by mach
+                    order = np.argsort(mv)
+                    mv, sv = mv[order], sv[order]
+                    if mv[0] <= 0.3 <= mv[-1]:
+                        stability_margin_mach03_cal = float(np.interp(0.3, mv, sv))
 
             events = orh.get_events(sim)
             logger.info("OR extract (subprocess): events fetched (%d types)", len(events))
@@ -103,6 +117,7 @@ def _run_in_subprocess(ork_path: str, jar_path: str, result_queue) -> None:
                     "time_to_apogee_s": time_to_apogee_s,
                     "velocity_off_rail_ms": velocity_off_rail_ms,
                     "stability_margin_cal": stability_margin_cal,
+                    "stability_margin_mach03_cal": stability_margin_mach03_cal,
                     "timeseries": timeseries,
                 },
             })
@@ -214,6 +229,7 @@ def extract_or_results_from_stored(stored_results: dict) -> dict:
         "time_to_apogee_s": time_to_apogee_s,
         "velocity_off_rail_ms": velocity_off_rail_ms,
         "stability_margin_cal": stability_margin_cal,
+        "stability_margin_mach03_cal": None,  # not available from stored results
         "timeseries": timeseries,
         "or_launch_rod_length_m": or_launch_rod_length_m,
     }

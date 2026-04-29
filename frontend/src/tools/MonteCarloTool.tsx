@@ -25,6 +25,15 @@ interface MCResult {
 
 const M_FT = 3.28084;
 const MS_MPH = 2.23694;
+const R_EARTH = 6378137;
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (d: number) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R_EARTH * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Props) {
   const imp = unitSystem === 'imperial';
@@ -40,6 +49,8 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
   const [useLiveWeather, setUseLiveWeather] = useState(false);
   const [weatherDateTime, setWeatherDateTime] = useState(nowRoundedLocalISO());
   const [orkFile, setOrkFile] = useState<File | null>(selectedFile ?? null);
+  const [waiverRadiusM, setWaiverRadiusM] = useState(0);
+  const [showWaiver, setShowWaiver] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (selectedFile) setOrkFile(selectedFile); }, [selectedFile]);
@@ -92,7 +103,7 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
     return () => obs.disconnect();
   }, [mcResult]);
 
-  // Update landing scatter on map
+  // Update landing scatter + waiver circle on map
   useEffect(() => {
     const layer = landingLayer.current;
     if (!layer || !mcResult) return;
@@ -102,6 +113,20 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
         radius: 4, color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.5, weight: 0,
       }).addTo(layer);
     });
+    // FAA waiver radius circle
+    if (showWaiver && waiverRadiusM > 0) {
+      L.circle([config.lat, config.lon], {
+        radius: waiverRadiusM,
+        color: '#ef4444',
+        weight: 2,
+        opacity: 0.8,
+        dashArray: '8 6',
+        fillColor: '#ef4444',
+        fillOpacity: 0.06,
+      })
+        .bindPopup(`<b>FAA Waiver Radius</b><br>${waiverRadiusM >= 1000 ? `${(waiverRadiusM / 1000).toFixed(1)} km` : `${waiverRadiusM} m`} (${Math.round(waiverRadiusM * M_FT).toLocaleString()} ft)<br><span style="color:#aaa">95th percentile of ${mcResult.landings.length} landing points</span>`)
+        .addTo(layer);
+    }
     // Fit map to landing cluster
     if (mcResult.landings.length > 0) {
       const lats = mcResult.landings.map(p => p.lat);
@@ -110,9 +135,16 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
         [Math.min(...lats, config.lat) - 0.02, Math.min(...lons, config.lon) - 0.02],
         [Math.max(...lats, config.lat) + 0.02, Math.max(...lons, config.lon) + 0.02],
       );
+      // Extend bounds for waiver circle
+      if (showWaiver && waiverRadiusM > 0) {
+        const dLat = waiverRadiusM / 111111;
+        const dLon = waiverRadiusM / (111111 * Math.cos(config.lat * Math.PI / 180));
+        bounds.extend([config.lat + dLat, config.lon + dLon]);
+        bounds.extend([config.lat - dLat, config.lon - dLon]);
+      }
       leafletMap.current?.fitBounds(bounds, { padding: [20, 20] });
     }
-  }, [mcResult]);
+  }, [mcResult, showWaiver, waiverRadiusM]);
 
   const handleRun = async () => {
     if (!orkFile) { setError('Re-select your .ork file'); return; }
@@ -155,7 +187,16 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
             try { ev = JSON.parse(line.slice(6)); } catch { continue; }
             if (ev.stage === 'error') throw new Error(ev.message);
             if (ev.stage === 'simulating') setProgress({ done: ev.done ?? 0, total: ev.total ?? nSims });
-            if (ev.stage === 'done') setMcResult(ev.result as MCResult);
+            if (ev.stage === 'done') {
+                const r = ev.result as MCResult;
+                setMcResult(r);
+                // Auto-compute 95th-percentile waiver radius
+                if (r.landings.length >= 5) {
+                  const dists = r.landings.map(p => haversineMeters(config.lat, config.lon, p.lat, p.lon)).sort((a, b) => a - b);
+                  const idx = Math.min(Math.ceil(0.95 * dists.length) - 1, dists.length - 1);
+                  setWaiverRadiusM(Math.round(dists[idx]));
+                }
+              }
           }
         }
       }
@@ -275,6 +316,37 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
           <div className="flex items-center gap-3 text-xs text-gray-500">
             <span className="text-yellow-400">●</span> Landing scatter ({mcResult.n_success}/{mcResult.n_total} successful)
             <span className="text-blue-400">●</span> Launch site
+            {waiverRadiusM > 0 && (
+              <>
+                <span className="text-red-400">◯</span> Waiver radius
+                <button
+                  onClick={() => setShowWaiver(v => !v)}
+                  className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                    showWaiver
+                      ? 'bg-red-600/20 border-red-500/40 text-red-300'
+                      : 'bg-gray-800 border-gray-700 text-gray-500'
+                  }`}
+                >
+                  {showWaiver ? 'Hide' : 'Show'}
+                </button>
+              </>
+            )}
+          </div>
+          {/* Waiver radius input */}
+          <div className="flex items-center gap-2 text-xs">
+            <label className="text-gray-400">Waiver radius</label>
+            <div className="flex items-center gap-1">
+              <input
+                type="number" min={0} step={imp ? 100 : 50}
+                value={imp ? Math.round(waiverRadiusM * M_FT) : waiverRadiusM}
+                onChange={e => setWaiverRadiusM(imp ? Number(e.target.value) / M_FT : Number(e.target.value))}
+                className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-white text-xs"
+              />
+              <span className="text-gray-500">{imp ? 'ft' : 'm'}</span>
+            </div>
+            {mcResult.landings.length >= 5 && (
+              <span className="text-gray-600 text-[10px]">(auto: 95th percentile)</span>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">

@@ -125,6 +125,7 @@ function CachedBanner({ meta, stale, onClear }: { meta: CacheMeta; stale: boolea
 }
 
 type AppState = 'idle' | 'simulating' | 'results' | 'error';
+const M_FT = 3.28084;
 
 export default function App() {
   const [appState, setAppState] = useState<AppState>('idle');
@@ -145,6 +146,7 @@ export default function App() {
   const [activePage, setActivePage] = useState<ActivePage>('main');
   const [finEdits, setFinEdits] = useState<Record<string, Partial<FinSetInfo>>>({});
   const [resimulating, setResimulating] = useState(false);
+  const [waiverRadiusM, setWaiverRadiusM] = useState(0);
 
   useEffect(() => {
     const entry = loadCache();
@@ -578,7 +580,27 @@ export default function App() {
               weatherIsImperial={imp}
               launchDateTime={config.weatherDateTime}
               hourlyLandings={results.hourly_landings}
+              waiverRadiusM={waiverRadiusM || undefined}
             />
+            <div className="flex items-center gap-2 text-xs mt-1">
+              <label className="text-gray-400">FAA waiver radius</label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number" min={0} step={imp ? 100 : 50}
+                  value={imp ? Math.round(waiverRadiusM * M_FT) : waiverRadiusM}
+                  onChange={e => setWaiverRadiusM(imp ? Number(e.target.value) / M_FT : Number(e.target.value))}
+                  placeholder={imp ? 'ft' : 'm'}
+                  className="w-28 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-white text-xs"
+                />
+                <span className="text-gray-500">{imp ? 'ft' : 'm'}</span>
+              </div>
+              {waiverRadiusM > 0 && (
+                <button
+                  onClick={() => setWaiverRadiusM(0)}
+                  className="text-gray-500 hover:text-red-400 text-[10px]"
+                >clear</button>
+              )}
+            </div>
           </>
         )}
       </main>

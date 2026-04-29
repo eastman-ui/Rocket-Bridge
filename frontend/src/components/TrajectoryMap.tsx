@@ -27,6 +27,7 @@ interface Props {
   weatherIsImperial?: boolean;
   launchDateTime?: string;
   hourlyLandings?: HourlyLanding[];
+  waiverRadiusM?: number;
 }
 
 const DRIFT_P_LEVELS = [1000, 925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10] as const;
@@ -160,12 +161,13 @@ export function TrajectoryMap({
   trajectory, launchLat, launchLon, launchElevationM,
   apogeeTimeS, burnOutTimeS, kmlData,
   weatherData, weatherIsImperial, launchDateTime,
-  hourlyLandings,
+  hourlyLandings, waiverRadiusM,
 }: Props) {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const [showDrift, setShowDrift] = useState(true);
   const [showAircraft, setShowAircraft] = useState(false);
+  const [showWaiver, setShowWaiver] = useState(true);
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
 
   const fetchAircraft = useCallback(() => {
@@ -380,11 +382,30 @@ export function TrajectoryMap({
       }
     }
 
+    // ── FAA Waiver radius circle ───────────────────────────────────────────────
+    if (showWaiver && waiverRadiusM && waiverRadiusM > 0) {
+      L.circle([launchLat, launchLon], {
+        radius: waiverRadiusM,
+        color: '#ef4444',
+        weight: 2,
+        opacity: 0.8,
+        dashArray: '8 6',
+        fillColor: '#ef4444',
+        fillOpacity: 0.06,
+      })
+        .bindPopup(`<b>FAA Waiver Radius</b><br>${waiverRadiusM >= 1000 ? `${(waiverRadiusM / 1000).toFixed(1)} km` : `${Math.round(waiverRadiusM)} m`} (${Math.round(waiverRadiusM * M_FT).toLocaleString()} ft)`)
+        .addTo(map);
+    }
+
     // Fit map to trajectory + all drift prediction bounds
     const bounds = L.latLngBounds(latLons);
     driftLatLons.forEach(ll => bounds.extend(ll));
     if (showAircraft && aircraft.length > 0) {
       for (const ac of aircraft) bounds.extend([ac.lat, ac.lon]);
+    }
+    if (showWaiver && waiverRadiusM && waiverRadiusM > 0) {
+      bounds.extend([launchLat + waiverRadiusM / 111111, launchLon]);
+      bounds.extend([launchLat - waiverRadiusM / 111111, launchLon]);
     }
     map.fitBounds(bounds, { padding: [40, 40] });
 
@@ -392,7 +413,7 @@ export function TrajectoryMap({
       map.remove();
       leafletMap.current = null;
     };
-  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, showAircraft, aircraft, weatherIsImperial, launchDateTime, hourlyLandings]);
+  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, showAircraft, showWaiver, aircraft, weatherIsImperial, launchDateTime, hourlyLandings, waiverRadiusM]);
 
   // Resize map when container becomes visible (page switch)
   useEffect(() => {
@@ -420,6 +441,19 @@ export function TrajectoryMap({
             {showAircraft ? 'Hide aircraft' : 'Show aircraft'}
             {showAircraft && aircraft.length > 0 && <span className="ml-1.5 text-[10px] opacity-60">{aircraft.length}</span>}
           </button>
+          {waiverRadiusM && waiverRadiusM > 0 && (
+            <button
+              onClick={() => setShowWaiver(v => !v)}
+              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                showWaiver
+                  ? 'bg-red-600/20 border-red-500/40 text-red-300 hover:bg-red-600/30'
+                  : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-white'
+              }`}
+            >
+              {showWaiver ? 'Hide waiver' : 'Show waiver'}
+              <span className="ml-1.5 text-[10px] opacity-60">{waiverRadiusM >= 1000 ? `${(waiverRadiusM / 1000).toFixed(1)}km` : `${Math.round(waiverRadiusM)}m`}</span>
+            </button>
+          )}
           {(hourlyLandings?.length || weatherData) && (
             <button
               onClick={() => setShowDrift(v => !v)}
@@ -450,6 +484,7 @@ export function TrajectoryMap({
         Satellite overlay · altitude color gradient (blue → red) · click markers for details
         {showAircraft ? ' · yellow planes = live aircraft' : null}
         {showDrift && hourlyLandings?.length ? ' · colored dots = predicted landing per forecast hour' : showDrift && weatherData ? ' · colored dots = predicted landing per forecast hour' : null}
+        {showWaiver && waiverRadiusM && waiverRadiusM > 0 ? ' · red dashed circle = FAA waiver radius' : null}
       </p>
       <div ref={mapRef} className="rounded-lg overflow-hidden" style={{ height: 480 }} />
       {/* Altitude legend */}

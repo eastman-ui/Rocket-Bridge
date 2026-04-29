@@ -26,6 +26,8 @@ export interface ORResults {
   velocity_off_rail_ms?: number;
   stability_margin_cal?: number;
   stability_margin_mach03_cal?: number;
+  main_descent_speed_ms?: number;
+  drogue_descent_speed_ms?: number;
   timeseries?: TimeSeriesData;
   or_launch_rod_length_m?: number;
 }
@@ -43,6 +45,10 @@ export interface RocketPyResults {
   static_margin_mach03_cal: number;
   static_margin_mach03_pct: number;
   burn_out_time_s: number;
+  impact_velocity_ms: number;
+  drift_distance_m: number;
+  main_descent_speed_ms: number;
+  drogue_descent_speed_ms: number;
   weather_source: string;
   timeseries: TimeSeriesData;
   trajectory_3d: Trajectory3D;

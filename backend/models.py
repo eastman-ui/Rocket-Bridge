@@ -27,6 +27,8 @@ class ORResults(BaseModel):
     velocity_off_rail_ms: Optional[float] = None
     stability_margin_cal: Optional[float] = None
     stability_margin_mach03_cal: Optional[float] = None
+    main_descent_speed_ms: Optional[float] = None
+    drogue_descent_speed_ms: Optional[float] = None
     timeseries: Optional[TimeSeriesData] = None
     or_launch_rod_length_m: Optional[float] = None
 
@@ -43,6 +45,10 @@ class RocketPyResults(BaseModel):
     static_margin_mach03_cal: float = 0.0
     static_margin_mach03_pct: float = 0.0
     burn_out_time_s: float
+    impact_velocity_ms: float = 0.0
+    drift_distance_m: float = 0.0
+    main_descent_speed_ms: float = 0.0
+    drogue_descent_speed_ms: float = 0.0
     weather_source: str = "standard_atmosphere"
     timeseries: TimeSeriesData
     trajectory_3d: Trajectory3D

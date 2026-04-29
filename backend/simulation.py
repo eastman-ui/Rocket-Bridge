@@ -701,6 +701,34 @@ def run_rocketpy(
 
     burn_out_time_s = float(motor.burn_out_time)
 
+    # Impact / landing velocity and drift distance
+    impact_velocity_ms = 0.0
+    drift_distance_m = 0.0
+    try:
+        impact_velocity_ms = float(flight.impact_velocity)
+    except Exception:
+        pass
+    try:
+        x_imp = float(flight.x_impact)
+        y_imp = float(flight.y_impact)
+        drift_distance_m = float(np.sqrt(x_imp**2 + y_imp**2))
+    except Exception:
+        pass
+
+    # Parachute descent speed — mean speed after apogee during descent
+    main_descent_speed_ms = 0.0
+    drogue_descent_speed_ms = 0.0
+    try:
+        spd_t_src, spd_v_src = _source_cols(flight.speed)
+        apogee_t = float(flight.apogee_time)
+        # Find speeds after apogee
+        post_apogee = spd_v_src[spd_t_src > apogee_t]
+        if len(post_apogee) > 0:
+            # Mean descent speed (lower bound after chute opens)
+            main_descent_speed_ms = float(np.mean(post_apogee[post_apogee < np.percentile(post_apogee, 50)]))
+    except Exception:
+        pass
+
     # Stability margin at rail departure (most meaningful launch metric)
     try:
         static_margin_cal = float(flight.out_of_rail_stability_margin)
@@ -901,6 +929,10 @@ def run_rocketpy(
         "static_margin_mach03_cal": static_margin_mach03_cal,
         "static_margin_mach03_pct": static_margin_mach03_pct,
         "burn_out_time_s": burn_out_time_s,
+        "impact_velocity_ms": impact_velocity_ms,
+        "drift_distance_m": drift_distance_m,
+        "main_descent_speed_ms": main_descent_speed_ms,
+        "drogue_descent_speed_ms": drogue_descent_speed_ms,
         "timeseries": timeseries,
         "trajectory_3d": trajectory_3d,
         "weather_source": weather_source,

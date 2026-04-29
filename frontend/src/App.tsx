@@ -146,7 +146,7 @@ export default function App() {
   const [activePage, setActivePage] = useState<ActivePage>('main');
   const [finEdits, setFinEdits] = useState<Record<string, Partial<FinSetInfo>>>({});
   const [resimulating, setResimulating] = useState(false);
-  const [waiverRadiusM, setWaiverRadiusM] = useState(0);
+  const [waiverRadiusM, setWaiverRadiusM] = useState(1609);
 
   useEffect(() => {
     const entry = loadCache();
@@ -365,7 +365,7 @@ export default function App() {
       </header>
 
       <div className={activePage !== 'tools' ? 'hidden' : ''}>
-        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} selectedFile={selectedFile} />
+        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} selectedFile={selectedFile} waiverRadiusM={waiverRadiusM} />
       </div>
 
       <main className={`max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1 ${activePage !== 'main' ? 'hidden' : ''}`}>

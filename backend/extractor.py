@@ -118,6 +118,8 @@ def _run_in_subprocess(ork_path: str, jar_path: str, result_queue) -> None:
                     "velocity_off_rail_ms": velocity_off_rail_ms,
                     "stability_margin_cal": stability_margin_cal,
                     "stability_margin_mach03_cal": stability_margin_mach03_cal,
+                    "main_descent_speed_ms": None,
+                    "drogue_descent_speed_ms": None,
                     "timeseries": timeseries,
                 },
             })
@@ -230,6 +232,8 @@ def extract_or_results_from_stored(stored_results: dict) -> dict:
         "velocity_off_rail_ms": velocity_off_rail_ms,
         "stability_margin_cal": stability_margin_cal,
         "stability_margin_mach03_cal": None,  # not available from stored results
+        "main_descent_speed_ms": _find(stored_results, "main_descent_speed", "main_descent_speed_ms", "landing_velocity", "descent_rate"),
+        "drogue_descent_speed_ms": _find(stored_results, "drogue_descent_speed", "drogue_descent_speed_ms", "drogue_rate"),
         "timeseries": timeseries,
         "or_launch_rod_length_m": or_launch_rod_length_m,
     }

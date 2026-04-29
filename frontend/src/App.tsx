@@ -275,13 +275,17 @@ export default function App() {
             if (!line.startsWith('data: ')) continue;
             try {
               const d = JSON.parse(line.slice(6));
-              if (d.type === 'done' && d.result) {
-                setResults(d.result);
+              if (d.stage === 'error') throw new Error((d.message as string) ?? 'Re-simulation failed');
+              if (d.stage === 'done' && d.result) {
+                setResults(d.result as ComparisonResponse);
                 setAppState('results');
-                saveCache(d.result, config, selectedFile.name);
+                saveCache(d.result as ComparisonResponse, config, selectedFile.name);
                 setFinEdits({});
               }
-            } catch { /* skip */ }
+            } catch (parseErr) {
+              if (parseErr instanceof SyntaxError) continue;
+              throw parseErr;
+            }
           }
         }
       }
@@ -554,6 +558,7 @@ export default function App() {
                 apogeeTimeS={rpy.apogee_time_s}
                 burnOutTimeS={rpy.burn_out_time_s}
                 unitSystem={unitSystem}
+                launchElevationM={rpy.launch_elevation_m}
               />
               <OrientationRender
                 trajectory={rpy.trajectory_3d}

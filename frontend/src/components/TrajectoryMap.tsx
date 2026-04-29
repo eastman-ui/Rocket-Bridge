@@ -174,19 +174,8 @@ export function TrajectoryMap({
     fetch(url)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(j => {
-        const ac: Aircraft[] = (j.states ?? [])
-          .filter((s: any) => s[5] != null && s[6] != null)
-          .map((s: any) => ({
-            icao: s[0] as string,
-            callsign: (s[1] as string)?.trim() || s[0],
-            lon: s[5] as number,
-            lat: s[6] as number,
-            alt_m: (s[7] ?? s[13] ?? 0) as number,
-            velocity_ms: (s[9] ?? 0) as number,
-            heading: (s[10] ?? 0) as number,
-            on_ground: s[8] as boolean,
-          }))
-          .filter((a: Aircraft) => !a.on_ground);
+        const ac: Aircraft[] = (j.aircraft ?? [])
+          .filter((a: any) => !a.on_ground);
         setAircraft(ac);
       })
       .catch(() => setAircraft([]));

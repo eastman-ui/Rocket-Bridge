@@ -24,11 +24,13 @@ interface MCResult {
 }
 
 const M_FT = 3.28084;
+const MS_MPH = 2.23694;
 
 export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Props) {
   const imp = unitSystem === 'imperial';
   const [nSims, setNSims] = useState(50);
-  const [windStd, setWindStd] = useState(2.0);
+  // windStd stored in m/s; displayed in mph when imperial
+  const [windStdMs, setWindStdMs] = useState(2.0);
   const [massPct, setMassPct] = useState(2.0);
   const [cdPct, setCdPct] = useState(5.0);
   const [running, setRunning] = useState(false);
@@ -126,7 +128,7 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
         elevation: config.elevation.toString(), rail_length: config.railLength.toString(),
         inclination: config.inclination.toString(), heading: config.heading.toString(),
         n_sims: nSims.toString(),
-        wind_speed_std_ms: windStd.toString(),
+        wind_speed_std_ms: windStdMs.toString(),
         mass_variation_pct: massPct.toString(),
         cd_variation_pct: cdPct.toString(),
         use_live_weather: useLiveWeather.toString(),
@@ -225,7 +227,6 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
         {[
           { label: 'Simulations', val: nSims, set: setNSims, min: 10, max: 500, step: 10, unit: '' },
-          { label: 'Wind std', val: windStd, set: setWindStd, min: 0, max: 10, step: 0.5, unit: 'm/s' },
           { label: 'Mass variation', val: massPct, set: setMassPct, min: 0, max: 10, step: 0.5, unit: '%' },
           { label: 'Cd variation', val: cdPct, set: setCdPct, min: 0, max: 20, step: 1, unit: '%' },
         ].map(({ label, val, set, min, max, step, unit }) => (
@@ -236,6 +237,15 @@ export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Pro
               className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs" />
           </div>
         ))}
+        <div className="flex flex-col gap-1">
+          <label className="text-gray-400">Wind std <span className="text-gray-600">{imp ? 'mph' : 'm/s'}</span></label>
+          <input
+            type="number" min={0} max={imp ? 22 : 10} step={imp ? 1 : 0.5}
+            value={imp ? parseFloat((windStdMs * MS_MPH).toFixed(1)) : windStdMs}
+            onChange={e => setWindStdMs(imp ? Number(e.target.value) / MS_MPH : Number(e.target.value))}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs"
+          />
+        </div>
       </div>
 
       <button onClick={handleRun} disabled={running || !orkFile}

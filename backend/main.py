@@ -209,7 +209,7 @@ async def simulate(
         raise HTTPException(status_code=400, detail="File must be .ork")
 
     contents = await file.read()
-    filename = file.filename
+    safe_filename = os.path.basename(file.filename) or "upload.ork"
 
     async def generate():
         tmp_dir = tempfile.mkdtemp()
@@ -223,7 +223,7 @@ async def simulate(
                 return
 
             # Save file
-            ork_path = os.path.join(tmp_dir, filename)
+            ork_path = os.path.join(tmp_dir, safe_filename)
             with open(ork_path, "wb") as f:
                 f.write(contents)
 
@@ -383,25 +383,18 @@ async def sweep_endpoint(
     if not file.filename or not file.filename.endswith(".ork"):
         raise HTTPException(status_code=400, detail="File must be .ork")
     contents = await file.read()
-    filename = file.filename
+    safe_filename = os.path.basename(file.filename) or "upload.ork"
 
     async def generate():
         tmp_dir = tempfile.mkdtemp()
         try:
-            ork_path = os.path.join(tmp_dir, filename)
+            ork_path = os.path.join(tmp_dir, safe_filename)
             with open(ork_path, "wb") as f:
                 f.write(contents)
             yield _sse("converting", 10)
             params = await asyncio.to_thread(convert_ork, ork_path, tmp_dir)
 
-            completed = [0]
             total = max(2, min(sweep_steps, 20))
-
-            async def progress(done: int, total_: int):
-                completed[0] = done
-                pct = int(10 + 85 * done / total_)
-                yield  # can't yield from callback — use event queue instead
-
             yield _sse("simulating", 15, total=total)
             results = await run_sweep(
                 params, lat, lon, elevation, rail_length, inclination, heading,
@@ -452,12 +445,12 @@ async def motor_compare_endpoint(
     if not ids:
         raise HTTPException(status_code=400, detail="No motor IDs provided")
     contents = await file.read()
-    filename = file.filename
+    safe_filename = os.path.basename(file.filename) or "upload.ork"
 
     async def generate():
         tmp_dir = tempfile.mkdtemp()
         try:
-            ork_path = os.path.join(tmp_dir, filename)
+            ork_path = os.path.join(tmp_dir, safe_filename)
             with open(ork_path, "wb") as f:
                 f.write(contents)
             yield _sse("converting", 10)
@@ -486,12 +479,33 @@ async def airspace_aircraft(
     lamin: float = Query(...), lomin: float = Query(...),
     lamax: float = Query(...), lomax: float = Query(...),
 ):
-    url = f"https://opensky-network.org/api/states/all?lamin={lamin}&lomin={lomin}&lamax={lamax}&lomax={lomax}"
+    lat = (lamin + lamax) / 2
+    lon = (lomin + lomax) / 2
+    radius_nm = max(lamax - lamin, lomax - lomin) * 60  # degrees → nautical miles
+    url = f"https://api.adsb.lol/v2/point/{lat}/{lon}/{max(1, int(radius_nm))}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(url)
+            r = await client.get(url, headers={"Accept": "application/json"})
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+        aircraft = []
+        for ac in data.get("ac", []):
+            if ac.get("lat") is None or ac.get("lon") is None:
+                continue
+            alt_raw = ac.get("alt_baro")
+            on_ground = alt_raw == "ground"
+            alt_m = 0.0 if on_ground else float(alt_raw or ac.get("alt_geom") or 0) * 0.3048
+            aircraft.append({
+                "icao": ac.get("hex", ""),
+                "callsign": (ac.get("flight") or ac.get("hex") or "").strip(),
+                "lat": float(ac["lat"]),
+                "lon": float(ac["lon"]),
+                "alt_m": alt_m,
+                "velocity_ms": float(ac.get("gs") or 0) * 0.514444,
+                "heading": float(ac.get("track") or 0),
+                "on_ground": on_ground,
+            })
+        return {"aircraft": aircraft}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -500,57 +514,8 @@ async def airspace_aircraft(
 async def airspace_notams(
     lamin: float = Query(...), lomin: float = Query(...),
     lamax: float = Query(...), lomax: float = Query(...),
-    api_key: Optional[str] = Query(None),
 ):
-    if not api_key:
-        return {"items": [], "unavailable": True}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                "https://notams.aim.faa.gov/notamSearch/search",
-                params={
-                    "searchType": 0,
-                    "designatorsForLocationIdentifier": "",
-                    "notamType": "N",
-                    "format": "JSON",
-                    "latLow": lamin,
-                    "latHigh": lamax,
-                    "lonLow": lomin,
-                    "lonHigh": lomax,
-                    "key": api_key,
-                },
-            )
-            if resp.status_code != 200:
-                return {"items": [], "unavailable": True, "error": f"FAA API returned {resp.status_code}"}
-            data = resp.json()
-            items = []
-            for n in (data if isinstance(data, list) else data.get("notams", data.get("items", [])) or []):
-                try:
-                    coords = None
-                    lat_val = n.get("latitude") or n.get("lat")
-                    lon_val = n.get("longitude") or n.get("lon")
-                    if lat_val and lon_val:
-                        try:
-                            coords = {"lat": float(lat_val), "lon": float(lon_val)}
-                        except (ValueError, TypeError):
-                            pass
-                    items.append({
-                        "notamID": n.get("notamID", n.get("id", "—")),
-                        "location": n.get("location", n.get("icaoLocation")),
-                        "text": n.get("text", n.get("traditionalMessage", n.get("message"))),
-                        "startTime": n.get("effectiveStart", n.get("startDate")),
-                        "endTime": n.get("effectiveEnd", n.get("endDate")),
-                        "coordinates": coords,
-                        "radius": n.get("radius", 5),
-                        "altLower": n.get("lowerLimit"),
-                        "altUpper": n.get("upperLimit"),
-                    })
-                except Exception:
-                    continue
-            return {"items": items}
-    except Exception as e:
-        logger.warning("NOTAM fetch failed: %s", e)
-        return {"items": [], "unavailable": True, "error": str(e)}
+    return {"items": [], "unavailable": True}
 
 
 # ─── Monte Carlo ──────────────────────────────────────────────────────────────
@@ -566,7 +531,7 @@ async def monte_carlo_endpoint(
     heading: float = Query(0.0),
     use_live_weather: bool = Query(False),
     sim_datetime: Optional[str] = Query(None),
-    n_sims: int = Query(50),
+    n_sims: int = Query(50, ge=1, le=500),
     wind_speed_std_ms: float = Query(2.0),
     mass_variation_pct: float = Query(2.0),
     cd_variation_pct: float = Query(5.0),
@@ -574,12 +539,12 @@ async def monte_carlo_endpoint(
     if not file.filename or not file.filename.endswith(".ork"):
         raise HTTPException(status_code=400, detail="File must be .ork")
     contents = await file.read()
-    filename = file.filename
+    safe_filename = os.path.basename(file.filename) or "upload.ork"
 
     async def generate():
         tmp_dir = tempfile.mkdtemp()
         try:
-            ork_path = os.path.join(tmp_dir, filename)
+            ork_path = os.path.join(tmp_dir, safe_filename)
             with open(ork_path, "wb") as f:
                 f.write(contents)
             yield _sse("converting", 5)

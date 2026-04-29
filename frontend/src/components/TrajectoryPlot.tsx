@@ -11,6 +11,7 @@ interface TrajectoryPlotProps {
   apogeeTimeS: number;
   burnOutTimeS: number;
   unitSystem: UnitSystem;
+  launchElevationM: number;
 }
 
 function nearestIdx(times: number[], target: number): number {
@@ -29,6 +30,7 @@ export function TrajectoryPlot({
   apogeeTimeS,
   burnOutTimeS,
   unitSystem,
+  launchElevationM,
 }: TrajectoryPlotProps) {
   const imp = unitSystem === 'imperial';
   const scale = imp ? M_FT : 1;
@@ -36,7 +38,8 @@ export function TrajectoryPlot({
 
   const sx = trajectory.x.map(v => v * scale);
   const sy = trajectory.y.map(v => v * scale);
-  const sz = trajectory.z.map(v => v * scale);
+  // Subtract launch elevation to convert ASL → AGL
+  const sz = trajectory.z.map(v => (v - launchElevationM) * scale);
 
   const burnoutIdx = nearestIdx(trajectory.t, burnOutTimeS);
   const apogeeIdx  = nearestIdx(trajectory.t, apogeeTimeS);

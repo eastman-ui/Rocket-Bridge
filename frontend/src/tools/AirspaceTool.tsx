@@ -48,7 +48,6 @@ function aircraftIcon(heading: number): L.DivIcon {
   });
 }
 
-const FAA_KEY_KEY = 'rocketbridge_faa_api_key';
 
 export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   const imp = unitSystem === 'imperial';
@@ -78,8 +77,6 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
     setLocalLat(config.lat);
     setLocalLon(config.lon);
   }, [config.lat, config.lon]);
-  const [faaKey, setFaaKey] = useState(() => localStorage.getItem(FAA_KEY_KEY) ?? '');
-  const [showKeyInput, setShowKeyInput] = useState(false);
   const [locating, setLocating] = useState(false);
 
   const bbox = {
@@ -97,19 +94,8 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
       const r = await fetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
-      const states: Aircraft[] = (j.states ?? [])
-        .filter((s: any) => s[5] != null && s[6] != null)
-        .map((s: any) => ({
-          icao: s[0] as string,
-          callsign: (s[1] as string)?.trim() || s[0],
-          lon: s[5] as number,
-          lat: s[6] as number,
-          alt_m: (s[7] ?? s[13] ?? 0) as number,
-          velocity_ms: (s[9] ?? 0) as number,
-          heading: (s[10] ?? 0) as number,
-          on_ground: s[8] as boolean,
-        }))
-        .filter((a: Aircraft) => a.alt_m >= altFilter[0] && a.alt_m <= altFilter[1] && !a.on_ground);
+      const states: Aircraft[] = (j.aircraft ?? [])
+        .filter((a: any) => !a.on_ground && a.alt_m >= altFilter[0] && a.alt_m <= altFilter[1]);
       setAircraft(states);
     } catch (e: any) {
       setErrorAc(e.message);
@@ -124,7 +110,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
     setLoadingNotam(true);
     setErrorNotam(null);
     try {
-      const url = `/api/airspace/notams?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}${faaKey ? `&api_key=${encodeURIComponent(faaKey)}` : ''}`;
+      const url = `/api/airspace/notams?lamin=${bbox.lamin}&lomin=${bbox.lomin}&lamax=${bbox.lamax}&lomax=${bbox.lomax}`;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
@@ -330,26 +316,8 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
         </div>
       )}
       {notamUnavailable && (
-        <div className="text-xs text-gray-500 bg-gray-800/40 border border-gray-700/50 rounded-lg px-3 py-2 space-y-2">
-          <p>NOTAM data requires a free FAA API key. <a href="https://aa.data.faa.gov/data/register.jsf" target="_blank" rel="noopener" className="text-blue-400 underline">Register for a free API key</a></p>
-          <button onClick={() => setShowKeyInput(k => !k)} className="text-blue-400 underline">
-            {showKeyInput ? 'Hide' : 'Add'} API key
-          </button>
-          {showKeyInput && (
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={faaKey}
-                onChange={e => { setFaaKey(e.target.value); localStorage.setItem(FAA_KEY_KEY, e.target.value); }}
-                placeholder="FAA API key"
-                className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 flex-1"
-              />
-              <button onClick={() => { fetchNotams(); setShowKeyInput(false); }}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded text-[10px]">
-                Save & retry
-              </button>
-            </div>
-          )}
+        <div className="text-xs text-gray-500 bg-gray-800/40 border border-gray-700/50 rounded-lg px-3 py-2">
+          <p>NOTAM data is not available.</p>
         </div>
       )}
 

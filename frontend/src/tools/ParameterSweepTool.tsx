@@ -15,11 +15,11 @@ interface Props {
 
 type SweepParam = 'inclination' | 'rail_length' | 'heading' | 'elevation';
 
-const PARAM_DEFS: Record<SweepParam, { label: string; unit: string; defaultMin: number; defaultMax: number }> = {
-  inclination: { label: 'Inclination', unit: '°', defaultMin: 70, defaultMax: 89 },
-  rail_length:  { label: 'Rail Length', unit: 'm', defaultMin: 2, defaultMax: 8 },
-  heading:      { label: 'Heading', unit: '°', defaultMin: 0, defaultMax: 360 },
-  elevation:    { label: 'Elevation', unit: 'm', defaultMin: 0, defaultMax: 3000 },
+const PARAM_DEFS_M: Record<SweepParam, { label: string; unitM: string; unitImp: string; defaultMinM: number; defaultMaxM: number }> = {
+  inclination: { label: 'Inclination', unitM: '°',  unitImp: '°',  defaultMinM: 70,   defaultMaxM: 89   },
+  rail_length:  { label: 'Rail Length', unitM: 'm',  unitImp: 'ft', defaultMinM: 2,    defaultMaxM: 8    },
+  heading:      { label: 'Heading',     unitM: '°',  unitImp: '°',  defaultMinM: 0,    defaultMaxM: 360  },
+  elevation:    { label: 'Elevation',   unitM: 'm',  unitImp: 'ft', defaultMinM: 0,    defaultMaxM: 3000 },
 };
 
 interface SweepPoint {
@@ -33,11 +33,22 @@ interface SweepPoint {
 
 const M_FT = 3.28084;
 
+// params that need ft<->m conversion when imperial
+const LENGTH_PARAMS = new Set<SweepParam>(['rail_length', 'elevation']);
+
+function toDisplay(param: SweepParam, valM: number, imp: boolean) {
+  return LENGTH_PARAMS.has(param) && imp ? valM * M_FT : valM;
+}
+function toMetric(param: SweepParam, valDisp: number, imp: boolean) {
+  return LENGTH_PARAMS.has(param) && imp ? valDisp / M_FT : valDisp;
+}
+
 export function ParameterSweepTool({ result, config, unitSystem, selectedFile }: Props) {
   const imp = unitSystem === 'imperial';
   const [param, setParam] = useState<SweepParam>('inclination');
-  const [sweepMin, setSweepMin] = useState(PARAM_DEFS.inclination.defaultMin);
-  const [sweepMax, setSweepMax] = useState(PARAM_DEFS.inclination.defaultMax);
+  // sweepMin/sweepMax stored in display units (ft when imperial for length params)
+  const [sweepMin, setSweepMin] = useState(PARAM_DEFS_M.inclination.defaultMinM);
+  const [sweepMax, setSweepMax] = useState(PARAM_DEFS_M.inclination.defaultMaxM);
   const [steps, setSteps] = useState(10);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -49,12 +60,13 @@ export function ParameterSweepTool({ result, config, unitSystem, selectedFile }:
   const [orkFile, setOrkFile] = useState<File | null>(selectedFile ?? null);
   useEffect(() => { if (selectedFile) setOrkFile(selectedFile); }, [selectedFile]);
 
-  const def = PARAM_DEFS[param];
+  const def = PARAM_DEFS_M[param];
+  const displayUnit = imp ? def.unitImp : def.unitM;
 
   const handleParamChange = (p: SweepParam) => {
     setParam(p);
-    setSweepMin(PARAM_DEFS[p].defaultMin);
-    setSweepMax(PARAM_DEFS[p].defaultMax);
+    setSweepMin(toDisplay(p, PARAM_DEFS_M[p].defaultMinM, imp));
+    setSweepMax(toDisplay(p, PARAM_DEFS_M[p].defaultMaxM, imp));
     setSweepData(null);
   };
 
@@ -75,8 +87,8 @@ export function ParameterSweepTool({ result, config, unitSystem, selectedFile }:
         inclination: config.inclination.toString(),
         heading: config.heading.toString(),
         sweep_param: param,
-        sweep_min: sweepMin.toString(),
-        sweep_max: sweepMax.toString(),
+        sweep_min: toMetric(param, sweepMin, imp).toString(),
+        sweep_max: toMetric(param, sweepMax, imp).toString(),
         sweep_steps: steps.toString(),
         use_live_weather: useLiveWeather.toString(),
         ...(useLiveWeather ? { sim_datetime: weatherDateTime } : {}),
@@ -117,17 +129,20 @@ export function ParameterSweepTool({ result, config, unitSystem, selectedFile }:
   const altUnit = imp ? 'ft' : 'm';
 
   const valid = sweepData?.filter(p => !p.error) ?? [];
-  const xVals = valid.map(p => p.param_value);
+  // x values from API are always metric — convert to display units for chart/table
+  const xVals = valid.map(p => toDisplay(param, p.param_value, imp));
   const apogeeVals = valid.map(p => fmtAlt(p.apogee_m_agl ?? 0));
   const stabVals = valid.map(p => p.stability_cal ?? 0);
-  const currentVal = config[param === 'rail_length' ? 'railLength' : param] as number;
+  // current config value in display units for reference line
+  const currentValM = config[param === 'rail_length' ? 'railLength' : param] as number;
+  const currentVal = toDisplay(param, currentValM, imp);
 
   const layout: any = {
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
     margin: { t: 10, r: 60, b: 45, l: 60 },
     height: 280, autosize: true,
     xaxis: {
-      title: { text: `${def.label} (${def.unit})`, font: { color: '#9ca3af', size: 10 } },
+      title: { text: `${def.label} (${displayUnit})`, font: { color: '#9ca3af', size: 10 } },
       gridcolor: '#374151', color: '#6b7280', tickfont: { size: 9 },
     },
     yaxis: {
@@ -185,18 +200,18 @@ export function ParameterSweepTool({ result, config, unitSystem, selectedFile }:
           <label className="text-gray-400">Parameter</label>
           <select value={param} onChange={e => handleParamChange(e.target.value as SweepParam)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs">
-            {(Object.keys(PARAM_DEFS) as SweepParam[]).map(k => (
-              <option key={k} value={k}>{PARAM_DEFS[k].label}</option>
+            {(Object.keys(PARAM_DEFS_M) as SweepParam[]).map(k => (
+              <option key={k} value={k}>{PARAM_DEFS_M[k].label}</option>
             ))}
           </select>
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-gray-400">Min <span className="text-gray-600">{def.unit}</span></label>
+          <label className="text-gray-400">Min <span className="text-gray-600">{displayUnit}</span></label>
           <input type="number" value={sweepMin} onChange={e => setSweepMin(Number(e.target.value))}
             className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs" />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-gray-400">Max <span className="text-gray-600">{def.unit}</span></label>
+          <label className="text-gray-400">Max <span className="text-gray-600">{displayUnit}</span></label>
           <input type="number" value={sweepMax} onChange={e => setSweepMax(Number(e.target.value))}
             className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-xs" />
         </div>
@@ -237,7 +252,7 @@ export function ParameterSweepTool({ result, config, unitSystem, selectedFile }:
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-gray-500 border-b border-gray-700">
-                  <th className="text-left py-1 pr-4">{def.label} ({def.unit})</th>
+                  <th className="text-left py-1 pr-4">{def.label} ({displayUnit})</th>
                   <th className="text-right py-1 px-3">Apogee ({altUnit})</th>
                   <th className="text-right py-1 px-3">Max Vel ({imp ? 'ft/s' : 'm/s'})</th>
                   <th className="text-right py-1 px-3">Stability (cal)</th>
@@ -247,7 +262,7 @@ export function ParameterSweepTool({ result, config, unitSystem, selectedFile }:
               <tbody>
                 {valid.map(p => (
                   <tr key={p.param_value} className="border-b border-gray-800/40 hover:bg-gray-800/30">
-                    <td className="py-0.5 pr-4 font-mono">{p.param_value.toFixed(2)}</td>
+                    <td className="py-0.5 pr-4 font-mono">{toDisplay(param, p.param_value, imp).toFixed(2)}</td>
                     <td className="py-0.5 px-3 text-right font-mono">{fmtAlt(p.apogee_m_agl ?? 0).toLocaleString()}</td>
                     <td className="py-0.5 px-3 text-right font-mono">{((p.max_speed_ms ?? 0) * (imp ? M_FT : 1)).toFixed(1)}</td>
                     <td className="py-0.5 px-3 text-right font-mono">{(p.stability_cal ?? 0).toFixed(2)}</td>

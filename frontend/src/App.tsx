@@ -328,7 +328,25 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Units toggle — always visible so weather panel reflects it */}
+          {/* Cached file indicator in header */}
+          {cacheMeta && (
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 bg-gray-900 rounded-lg px-2 py-1 border border-gray-800">
+              <svg className="w-3 h-3 text-gray-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 1.1.9 2 2 2h12a2 2 0 002-2V9l-5-5H6a2 2 0 00-2 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v5h5" />
+              </svg>
+              <span className="truncate max-w-[120px]">{cacheMeta.filename}</span>
+              {resultsStale && <span className="text-amber-400 font-medium">stale</span>}
+              <button onClick={() => { localStorage.removeItem(CACHE_KEY); setCacheMeta(null); setResults(null); setAppState('idle'); }} className="text-gray-600 hover:text-gray-300 transition-colors">✕</button>
+            </div>
+          )}
+          {/* Weather source badge */}
+          {appState === 'results' && results?.rocketpy_results && (
+            <span className="text-xs text-gray-400 bg-gray-900 rounded-lg px-2.5 py-1.5 border border-gray-800">
+              {results.rocketpy_results.weather_source === 'standard_atmosphere' ? 'Std Atmosphere' : results.rocketpy_results.weather_source}
+            </span>
+          )}
+          {/* Units toggle */}
           <div className="flex items-center gap-0.5 bg-gray-900 rounded-lg px-2 py-1 border border-gray-800">
             {(['metric', 'imperial'] as UnitSystem[]).map((u) => (
               <button
@@ -342,6 +360,23 @@ export default function App() {
               </button>
             ))}
           </div>
+          {/* Stability unit selector in header */}
+          {appState === 'results' && (
+            <div className="flex items-center gap-0.5 bg-gray-900 rounded-lg px-2 py-1 border border-gray-800">
+              <span className="text-xs text-gray-500 mr-1">Stab</span>
+              {(['cal', 'pct'] as StabilityUnit[]).map((u) => (
+                <button
+                  key={u}
+                  onClick={() => setStabilityUnit(u)}
+                  className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                    stabilityUnit === u ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'
+                  }`}
+                >
+                  {u === 'cal' ? 'Cal' : '%'}
+                </button>
+              ))}
+            </div>
+          )}
           {results?.rocket_params && (
             <button
               onClick={() => setPanelOpen(true)}
@@ -366,7 +401,7 @@ export default function App() {
       </header>
 
       <div className={activePage !== 'tools' ? 'hidden' : ''}>
-        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} selectedFile={selectedFile} waiverRadiusM={waiverRadiusM} mapContainerRef={mapContainerRef.current} />
+        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} selectedFile={selectedFile} waiverRadiusM={waiverRadiusM} mapContainerRef={mapContainerRef.current} weatherData={weatherData ?? undefined} />
       </div>
 
       <main className={`max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1 ${activePage !== 'main' ? 'hidden' : ''}`}>
@@ -417,39 +452,6 @@ export default function App() {
           <div className="flex flex-col gap-3">
             {appState === 'results' && results && rpy && or_ ? (
               <>
-                {cacheMeta && (
-                  <CachedBanner
-                    meta={cacheMeta}
-                    stale={resultsStale}
-                    onClear={() => {
-                      localStorage.removeItem(CACHE_KEY);
-                      setCacheMeta(null);
-                      setResults(null);
-                      setAppState('idle');
-                    }}
-                  />
-                )}
-                {/* Controls */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-gray-600 bg-gray-900 rounded-lg px-2.5 py-1.5 border border-gray-800">
-                    {rpy.weather_source === 'standard_atmosphere' ? 'Std Atmosphere' : rpy.weather_source}
-                  </span>
-                  <div className="flex items-center gap-0.5 bg-gray-900 rounded-lg px-2.5 py-1.5 border border-gray-800">
-                    <span className="text-xs text-gray-500 mr-1.5">Stability</span>
-                    {(['cal', 'pct'] as StabilityUnit[]).map((u) => (
-                      <button
-                        key={u}
-                        onClick={() => setStabilityUnit(u)}
-                        className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                          stabilityUnit === u ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
-                        }`}
-                      >
-                        {u === 'cal' ? 'Calibers' : '%'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
                 {/* Unsupported config warnings — minimized by default */}
                 {results.warnings && results.warnings.length > 0 && (
                   <details className="bg-yellow-950 border border-yellow-700 rounded-xl">

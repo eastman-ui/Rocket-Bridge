@@ -156,7 +156,15 @@ function aircraftIcon(heading: number): L.DivIcon {
 }
 
 const M_FT = 3.28084;
-const AC_REFRESH_MS = 120_000;
+const AC_INTERVALS = [
+  { label: '1s', ms: 1000 },
+  { label: '5s', ms: 5000 },
+  { label: '10s', ms: 10000 },
+  { label: '30s', ms: 30000 },
+  { label: '1m', ms: 60000 },
+  { label: '2m', ms: 120000 },
+  { label: '5m', ms: 300000 },
+];
 
 export function TrajectoryMap({
   trajectory, launchLat, launchLon, launchElevationM,
@@ -169,7 +177,27 @@ export function TrajectoryMap({
   const [showDrift, setShowDrift] = useState(true);
   const [showAircraft, setShowAircraft] = useState(false);
   const [showWaiver, setShowWaiver] = useState(true);
+  const [showPrecip, setShowPrecip] = useState(false);
+  const [acInterval, setAcInterval] = useState(120000);
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
+
+  // RainViewer radar frames
+  interface RainFrame { path: string; time: number; }
+  const [rainFrames, setRainFrames] = useState<RainFrame[]>([]);
+  const [rainIdx, setRainIdx] = useState(0);
+
+  useEffect(() => {
+    fetch('https://api.rainviewer.com/public/weather-maps.json')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(j => {
+        const radarFrames: RainFrame[] = [
+          ...(j.radar?.past ?? []).map((f: any) => ({ path: f.path, time: f.time })),
+          ...(j.radar?.nowcast ?? []).map((f: any) => ({ path: f.path, time: f.time })),
+        ];
+        setRainFrames(radarFrames);
+      })
+      .catch(() => setRainFrames([]));
+  }, []);
 
   const fetchAircraft = useCallback(() => {
     const d = 0.5;
@@ -187,9 +215,9 @@ export function TrajectoryMap({
   useEffect(() => {
     if (!showAircraft) { setAircraft([]); return; }
     fetchAircraft();
-    const id = setInterval(fetchAircraft, AC_REFRESH_MS);
+    const id = setInterval(fetchAircraft, acInterval);
     return () => clearInterval(id);
-  }, [showAircraft, fetchAircraft]);
+  }, [showAircraft, fetchAircraft, acInterval]);
 
   useEffect(() => {
     if (!mapRef.current || trajectory.t.length === 0) return;
@@ -416,6 +444,27 @@ export function TrajectoryMap({
     };
   }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, showAircraft, showWaiver, aircraft, weatherIsImperial, launchDateTime, hourlyLandings, waiverRadiusM]);
 
+  // Weather overlay layers — toggled without rebuilding the map
+  const precipLayerRef = useRef<L.TileLayer | null>(null);
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map) return;
+
+    // Precipitation layer
+    if (precipLayerRef.current) { map.removeLayer(precipLayerRef.current); precipLayerRef.current = null; }
+    if (showPrecip && rainFrames.length > 0) {
+      const frame = rainFrames[rainIdx] ?? rainFrames[rainFrames.length - 1];
+      precipLayerRef.current = L.tileLayer(
+        `https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/6/1_1.png`,
+        { maxZoom: 19, maxNativeZoom: 7, opacity: 0.55, noWrap: true }
+      ).addTo(map);
+    }
+
+    return () => {
+      if (precipLayerRef.current) { map.removeLayer(precipLayerRef.current); precipLayerRef.current = null; }
+    };
+  }, [showPrecip, rainIdx, rainFrames]);
+
   // Resize map when container becomes visible (page switch)
   useEffect(() => {
     const map = leafletMap.current;
@@ -442,6 +491,17 @@ export function TrajectoryMap({
             {showAircraft ? 'Hide aircraft' : 'Show aircraft'}
             {showAircraft && aircraft.length > 0 && <span className="ml-1.5 text-[10px] opacity-60">{aircraft.length}</span>}
           </button>
+          {showAircraft && (
+            <select
+              value={acInterval}
+              onChange={e => setAcInterval(Number(e.target.value))}
+              className="text-xs bg-gray-800 border border-gray-700 rounded-lg px-1.5 py-1.5 text-gray-400 focus:outline-none focus:border-amber-500"
+            >
+              {AC_INTERVALS.map(opt => (
+                <option key={opt.ms} value={opt.ms}>{opt.label}</option>
+              ))}
+            </select>
+          )}
           {waiverRadiusM && waiverRadiusM > 0 && (
             <button
               onClick={() => setShowWaiver(v => !v)}
@@ -468,6 +528,18 @@ export function TrajectoryMap({
               {hourlyLandings?.length ? <span className="ml-1.5 text-[10px] opacity-60">GFS</span> : null}
             </button>
           )}
+          {rainFrames.length > 0 && (
+            <button
+              onClick={() => setShowPrecip(v => !v)}
+              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                showPrecip
+                  ? 'bg-cyan-600/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/30'
+                  : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-white'
+              }`}
+            >
+              {showPrecip ? 'Hide precipitation' : 'Show precipitation'}
+            </button>
+          )}
           {kmlData && (
             <button
               onClick={() => downloadKml(kmlData)}
@@ -486,8 +558,26 @@ export function TrajectoryMap({
         {showAircraft ? ' · yellow planes = live aircraft' : null}
         {showDrift && hourlyLandings?.length ? ' · colored dots = predicted landing per forecast hour' : showDrift && weatherData ? ' · colored dots = predicted landing per forecast hour' : null}
         {showWaiver && waiverRadiusM && waiverRadiusM > 0 ? ' · red dashed circle = FAA waiver radius' : null}
+        {showPrecip ? ' · cyan overlay = precipitation radar' : null}
       </p>
       <div ref={(el) => { (mapRef as any).current = el; if (containerRef) containerRef(el); }} className="rounded-lg overflow-hidden" style={{ height: 480 }} />
+      {/* Weather timelines */}
+      {showPrecip && rainFrames.length > 0 && (
+        <div className="flex items-center gap-3 mt-2">
+          <span className="text-[10px] text-cyan-500 font-medium w-20 shrink-0">Precip</span>
+          <input
+            type="range" min={0} max={rainFrames.length - 1} value={rainIdx}
+            onChange={e => setRainIdx(Number(e.target.value))}
+            className="flex-1 h-1.5 accent-cyan-500 cursor-pointer"
+          />
+          <span className="text-[10px] text-gray-500 tabular-nums whitespace-nowrap">
+            {new Date(rainFrames[rainIdx].time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <span className="text-[9px] text-gray-600">
+            {rainFrames[rainIdx].time * 1000 < Date.now() ? 'past' : 'forecast'}
+          </span>
+        </div>
+      )}
       {/* Altitude legend */}
       <div className="flex items-center gap-2 mt-2">
         <span className="text-xs text-gray-600">Low</span>

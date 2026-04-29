@@ -365,7 +365,7 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Cloud Layers</p>
               <p className="text-xs text-gray-600 mt-0.5">{altUnit} AGL · CLR FEW SCT BKN OVC</p>
             </div>
-            <div className="overflow-y-auto" style={{ maxHeight: 380 }}>
+            <div className="overflow-y-auto" style={{ maxHeight: 380 }} ref={el => { if (el) el.scrollTop = el.scrollHeight; }}>
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-gray-700">

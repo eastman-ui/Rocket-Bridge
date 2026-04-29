@@ -83,15 +83,13 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
         const dists = mcResult.landings.map((p: any) => haversineMeters(config.lat, config.lon, p.lat, p.lon)).sort((a: number, b: number) => a - b);
         const p95 = dists[Math.min(Math.ceil(0.95 * dists.length) - 1, dists.length - 1)];
         if (p95 > 0) setMcDriftDist(Math.round(p95));
-        // Generate map-context MC scatter image
+        // Generate MC scatter image with map tile background
         const canvas = document.createElement('canvas');
         canvas.width = 500; canvas.height = 400;
         const ctx = canvas.getContext('2d')!;
-        // Dark background
         ctx.fillStyle = '#0f172a'; ctx.fillRect(0, 0, 500, 400);
         const lats = mcResult.landings.map((p: any) => p.lat);
         const lons = mcResult.landings.map((p: any) => p.lon);
-        // Expand bounds to show waiver circle + context
         const waiverDegLat = waiverM / 111111;
         const waiverDegLon = waiverM / (111111 * Math.cos(config.lat * Math.PI / 180));
         const minLat = Math.min(...lats, config.lat - waiverDegLat) - 0.002;
@@ -103,22 +101,49 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
         const plotH = 400 - 2 * pad;
         const sx = (lon: number) => pad + (lon - minLon) / (maxLon - minLon || 0.001) * plotW;
         const sy = (lat: number) => pad + plotH - (lat - minLat) / (maxLat - minLat || 0.001) * plotH;
-        // Draw lat/lon grid
-        ctx.strokeStyle = '#1e3a5f'; ctx.lineWidth = 0.5; ctx.setLineDash([]);
-        const latStep = Math.max(0.001, Math.round((maxLat - minLat) / 5 * 10000) / 10000);
-        const lonStep = Math.max(0.001, Math.round((maxLon - minLon) / 5 * 10000) / 10000);
-        ctx.fillStyle = '#4b6584'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
-        for (let lat = Math.ceil(minLat / latStep) * latStep; lat <= maxLat; lat += latStep) {
-          const py = sy(lat);
-          ctx.beginPath(); ctx.moveTo(pad, py); ctx.lineTo(500 - pad, py); ctx.stroke();
-          ctx.fillText(lat.toFixed(4), 500 - pad + 2, py + 3);
+        // Fetch map tiles and compose onto canvas
+        const centerLat = (minLat + maxLat) / 2;
+        const centerLon = (minLon + maxLon) / 2;
+        const latSpan = maxLat - minLat;
+        const zoom = Math.max(1, Math.min(18, Math.floor(Math.log2(360 / latSpan * 256 / 400))));
+        const tileSize = 256;
+        const nTiles = 1 << zoom;
+        const tileLat2y = (lat: number) => { const n = Math.PI * (1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI); return n / 2 * nTiles; };
+        const tileLon2x = (lon: number) => ((lon + 180) / 360) * nTiles;
+        const cx = tileLon2x(centerLon);
+        const cy = tileLat2y(centerLat);
+        const tilesX = Math.ceil(500 / tileSize) + 1;
+        const tilesY = Math.ceil(400 / tileSize) + 1;
+        const startTileX = Math.floor(cx - tilesX / 2);
+        const startTileY = Math.floor(cy - tilesY / 2);
+        const pixelOffsetX = (cx - startTileX) * tileSize - 500 / 2;
+        const pixelOffsetY = (cy - startTileY) * tileSize - 400 / 2;
+        // Load tiles as images then draw
+        const tilePromises: Promise<{img: HTMLImageElement; tx: number; ty: number}>[] = [];
+        for (let tx = startTileX; tx < startTileX + tilesX + 1; tx++) {
+          for (let ty = startTileY; ty < startTileY + tilesY + 1; ty++) {
+            if (ty < 0 || ty >= nTiles) continue;
+            const url = `https://a.basemaps.cartocdn.com/dark_all/${zoom}/${tx}/${ty}.png`;
+            tilePromises.push(
+              new Promise<{img: HTMLImageElement; tx: number; ty: number}>((resolve) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => resolve({ img, tx, ty });
+                img.onerror = () => resolve({ img: null as any, tx, ty });
+                img.src = url;
+              })
+            );
+          }
         }
-        ctx.textAlign = 'left';
-        for (let lon = Math.ceil(minLon / lonStep) * lonStep; lon <= maxLon; lon += lonStep) {
-          const px = sx(lon);
-          ctx.beginPath(); ctx.moveTo(px, pad); ctx.lineTo(px, 400 - pad); ctx.stroke();
-          ctx.fillText(lon.toFixed(4), px - 10, pad - 4);
+        const tiles = await Promise.all(tilePromises);
+        for (const { img, tx, ty } of tiles) {
+          if (!img || !img.width) continue;
+          const px = (tx - startTileX) * tileSize - pixelOffsetX;
+          const py = (ty - startTileY) * tileSize - pixelOffsetY;
+          ctx.drawImage(img, px, py, tileSize, tileSize);
         }
+        // Semi-transparent overlay for contrast
+        ctx.fillStyle = 'rgba(15,23,42,0.3)'; ctx.fillRect(0, 0, 500, 400);
         // Draw waiver circle
         ctx.strokeStyle = '#ef4444'; ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5;
         const cX = sx(config.lon), cY = sy(config.lat);
@@ -130,10 +155,26 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
         // Draw landing scatter
         ctx.fillStyle = '#f59e0b99';
         for (const pt of mcResult.landings) { ctx.beginPath(); ctx.arc(sx(pt.lon), sy(pt.lat), 3.5, 0, 2 * Math.PI); ctx.fill(); }
+        // Lat/lon grid lines
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 0.5; ctx.setLineDash([]);
+        const latStep = Math.max(0.001, Math.round((maxLat - minLat) / 5 * 10000) / 10000);
+        const lonStep = Math.max(0.001, Math.round((maxLon - minLon) / 5 * 10000) / 10000);
+        ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+        for (let lat = Math.ceil(minLat / latStep) * latStep; lat <= maxLat; lat += latStep) {
+          const py = sy(lat);
+          ctx.beginPath(); ctx.moveTo(pad, py); ctx.lineTo(500 - pad, py); ctx.stroke();
+          ctx.fillText(lat.toFixed(4), 470, py + 3);
+        }
+        ctx.textAlign = 'left';
+        for (let lon = Math.ceil(minLon / lonStep) * lonStep; lon <= maxLon; lon += lonStep) {
+          const px = sx(lon);
+          ctx.beginPath(); ctx.moveTo(px, pad); ctx.lineTo(px, 400 - pad); ctx.stroke();
+          ctx.fillText(lon.toFixed(4), px - 10, 394);
+        }
         // Labels
-        ctx.fillStyle = '#9ca3af'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+        ctx.fillStyle = '#e5e7eb'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
         ctx.fillText('MC Scatter (10 sims)', pad, pad - 16);
-        ctx.fillText(`${mcResult.n_success ?? '?'}/${mcResult.n_total ?? 10} success`, 400, pad - 16);
+        ctx.fillText(`${mcResult.n_success ?? '?'}/${mcResult.n_total ?? 10} success`, 390, pad - 16);
         ctx.fillText(`95th pctl: ${fmtDist(p95)}`, pad, 400 - pad + 16);
         setMcImage(canvas.toDataURL('image/png'));
       }

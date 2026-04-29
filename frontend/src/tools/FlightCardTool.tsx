@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import type { ComparisonResponse, HourlyLanding } from '../types';
 import type { LaunchConfig } from '../components/LaunchConfig';
 import type { UnitSystem } from '../components/TimeSeriesCharts';
@@ -30,9 +30,20 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
   const fmtVel = (ms: number) => imp ? `${(ms * MS_FTS).toFixed(1)} ft/s` : `${ms.toFixed(1)} m/s`;
   const fmtDist = (m: number) => imp ? `${(m / MI_M).toFixed(2)} mi` : `${(m / 1000).toFixed(2)} km`;
 
-  const driftDist = rpy.drift_distance_m ?? 0;
+  // Drift distance: prefer MC 95th percentile when available, else single-flight drift
+  const [mcDriftDist, setMcDriftDist] = useState(0);
+  const driftDist = mcDriftDist > 0 ? mcDriftDist : (rpy.drift_distance_m ?? 0);
   const waiverM = waiverRadiusM ?? MI_M;
   const waiverViolated = driftDist > waiverM && driftDist > 0;
+
+  const R_EARTH = 6378137;
+  function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const toRad = (d: number) => d * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return R_EARTH * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
 
   const handleRunQuickMC = async () => {
     if (!selectedFile) { setMcImage(null); return; }
@@ -68,28 +79,62 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
         }
       }
       if (mcResult && mcResult.landings) {
+        // Compute 95th percentile drift distance from MC landings
+        const dists = mcResult.landings.map((p: any) => haversineMeters(config.lat, config.lon, p.lat, p.lon)).sort((a: number, b: number) => a - b);
+        const p95 = dists[Math.min(Math.ceil(0.95 * dists.length) - 1, dists.length - 1)];
+        if (p95 > 0) setMcDriftDist(Math.round(p95));
+        // Generate map-context MC scatter image
         const canvas = document.createElement('canvas');
-        canvas.width = 400; canvas.height = 300;
+        canvas.width = 500; canvas.height = 400;
         const ctx = canvas.getContext('2d')!;
-        ctx.fillStyle = '#111827'; ctx.fillRect(0, 0, 400, 300);
+        // Dark background
+        ctx.fillStyle = '#0f172a'; ctx.fillRect(0, 0, 500, 400);
         const lats = mcResult.landings.map((p: any) => p.lat);
         const lons = mcResult.landings.map((p: any) => p.lon);
-        const minLat = Math.min(...lats, config.lat) - 0.001;
-        const maxLat = Math.max(...lats, config.lat) + 0.001;
-        const minLon = Math.min(...lons, config.lon) - 0.001;
-        const maxLon = Math.max(...lons, config.lon) + 0.001;
-        const sx = (lon: number) => 20 + (lon - minLon) / (maxLon - minLon || 0.001) * 360;
-        const sy = (lat: number) => 280 - (lat - minLat) / (maxLat - minLat || 0.001) * 260;
+        // Expand bounds to show waiver circle + context
+        const waiverDegLat = waiverM / 111111;
+        const waiverDegLon = waiverM / (111111 * Math.cos(config.lat * Math.PI / 180));
+        const minLat = Math.min(...lats, config.lat - waiverDegLat) - 0.002;
+        const maxLat = Math.max(...lats, config.lat + waiverDegLat) + 0.002;
+        const minLon = Math.min(...lons, config.lon - waiverDegLon) - 0.002;
+        const maxLon = Math.max(...lons, config.lon + waiverDegLon) + 0.002;
+        const pad = 30;
+        const plotW = 500 - 2 * pad;
+        const plotH = 400 - 2 * pad;
+        const sx = (lon: number) => pad + (lon - minLon) / (maxLon - minLon || 0.001) * plotW;
+        const sy = (lat: number) => pad + plotH - (lat - minLat) / (maxLat - minLat || 0.001) * plotH;
+        // Draw lat/lon grid
+        ctx.strokeStyle = '#1e3a5f'; ctx.lineWidth = 0.5; ctx.setLineDash([]);
+        const latStep = Math.max(0.001, Math.round((maxLat - minLat) / 5 * 10000) / 10000);
+        const lonStep = Math.max(0.001, Math.round((maxLon - minLon) / 5 * 10000) / 10000);
+        ctx.fillStyle = '#4b6584'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+        for (let lat = Math.ceil(minLat / latStep) * latStep; lat <= maxLat; lat += latStep) {
+          const py = sy(lat);
+          ctx.beginPath(); ctx.moveTo(pad, py); ctx.lineTo(500 - pad, py); ctx.stroke();
+          ctx.fillText(lat.toFixed(4), 500 - pad + 2, py + 3);
+        }
+        ctx.textAlign = 'left';
+        for (let lon = Math.ceil(minLon / lonStep) * lonStep; lon <= maxLon; lon += lonStep) {
+          const px = sx(lon);
+          ctx.beginPath(); ctx.moveTo(px, pad); ctx.lineTo(px, 400 - pad); ctx.stroke();
+          ctx.fillText(lon.toFixed(4), px - 10, pad - 4);
+        }
+        // Draw waiver circle
         ctx.strokeStyle = '#ef4444'; ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5;
         const cX = sx(config.lon), cY = sy(config.lat);
-        const edgeX = sx(config.lon + (waiverM / 111111) / Math.cos(config.lat * Math.PI / 180));
+        const edgeX = sx(config.lon + waiverDegLon);
         ctx.beginPath(); ctx.arc(cX, cY, edgeX - cX, 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle = '#3b82f6'; ctx.beginPath(); ctx.arc(cX, cY, 5, 0, 2 * Math.PI); ctx.fill();
-        ctx.fillStyle = '#f59e0b88';
-        for (const pt of mcResult.landings) { ctx.beginPath(); ctx.arc(sx(pt.lon), sy(pt.lat), 3, 0, 2 * Math.PI); ctx.fill(); }
-        ctx.fillStyle = '#9ca3af'; ctx.font = '10px monospace';
-        ctx.fillText('MC 10-sim scatter', 10, 15);
-        ctx.fillText(`${mcResult.n_success ?? '?'}/${mcResult.n_total ?? 10}`, 340, 15);
+        // Draw launch point
+        ctx.fillStyle = '#3b82f6'; ctx.beginPath(); ctx.arc(cX, cY, 6, 0, 2 * Math.PI); ctx.fill();
+        ctx.fillStyle = '#93c5fd'; ctx.font = '9px sans-serif'; ctx.fillText('Launch', cX + 8, cY + 3);
+        // Draw landing scatter
+        ctx.fillStyle = '#f59e0b99';
+        for (const pt of mcResult.landings) { ctx.beginPath(); ctx.arc(sx(pt.lon), sy(pt.lat), 3.5, 0, 2 * Math.PI); ctx.fill(); }
+        // Labels
+        ctx.fillStyle = '#9ca3af'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+        ctx.fillText('MC Scatter (10 sims)', pad, pad - 16);
+        ctx.fillText(`${mcResult.n_success ?? '?'}/${mcResult.n_total ?? 10} success`, 400, pad - 16);
+        ctx.fillText(`95th pctl: ${fmtDist(p95)}`, pad, 400 - pad + 16);
         setMcImage(canvas.toDataURL('image/png'));
       }
     } catch { setMcImage(null); }
@@ -183,12 +228,6 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
     // MC scatter image
     if (mcImage) {
       try { doc.addImage(mcImage, 'PNG', 14, y, 80, 60); y += 64; } catch { /* skip */ }
-    }
-
-    // Warnings
-    if (result.warnings && result.warnings.length > 0) {
-      doc.setFontSize(7); doc.setTextColor(180, 80, 0);
-      result.warnings.forEach((w, i) => doc.text(`⚠ ${w}`, 14, y + i * 4));
     }
 
     // Footer

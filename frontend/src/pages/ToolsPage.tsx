@@ -15,6 +15,7 @@ interface ToolsPageProps {
   unitSystem: UnitSystem;
   selectedFile?: File | null;
   waiverRadiusM?: number;
+  mapContainerRef?: HTMLDivElement | null;
 }
 
 type ToolId = 'flutter' | 'flightcard' | 'airspace' | 'sweep' | 'motors' | 'montecarlo';
@@ -97,7 +98,7 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
-export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiverRadiusM }: ToolsPageProps) {
+export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiverRadiusM, mapContainerRef }: ToolsPageProps) {
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
   const hasResult = cachedResult !== null;
 
@@ -167,7 +168,7 @@ export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiv
         )}
         {cachedResult && (
           <div style={activeTool === 'flightcard' ? {} : { display: 'none' }}>
-            <FlightCardTool result={cachedResult} config={config} unitSystem={unitSystem} waiverRadiusM={waiverRadiusM} hourlyLandings={cachedResult.hourly_landings} />
+            <FlightCardTool result={cachedResult} config={config} unitSystem={unitSystem} waiverRadiusM={waiverRadiusM} hourlyLandings={cachedResult.hourly_landings} selectedFile={selectedFile} mapContainerRef={mapContainerRef} />
           </div>
         )}
         <div style={activeTool === 'airspace' ? {} : { display: 'none' }}>

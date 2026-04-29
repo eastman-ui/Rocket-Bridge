@@ -28,6 +28,7 @@ interface Props {
   launchDateTime?: string;
   hourlyLandings?: HourlyLanding[];
   waiverRadiusM?: number;
+  containerRef?: React.RefCallback<HTMLDivElement>;
 }
 
 const DRIFT_P_LEVELS = [1000, 925, 850, 700, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10] as const;
@@ -161,7 +162,7 @@ export function TrajectoryMap({
   trajectory, launchLat, launchLon, launchElevationM,
   apogeeTimeS, burnOutTimeS, kmlData,
   weatherData, weatherIsImperial, launchDateTime,
-  hourlyLandings, waiverRadiusM,
+  hourlyLandings, waiverRadiusM, containerRef,
 }: Props) {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
@@ -486,7 +487,7 @@ export function TrajectoryMap({
         {showDrift && hourlyLandings?.length ? ' · colored dots = predicted landing per forecast hour' : showDrift && weatherData ? ' · colored dots = predicted landing per forecast hour' : null}
         {showWaiver && waiverRadiusM && waiverRadiusM > 0 ? ' · red dashed circle = FAA waiver radius' : null}
       </p>
-      <div ref={mapRef} className="rounded-lg overflow-hidden" style={{ height: 480 }} />
+      <div ref={(el) => { (mapRef as any).current = el; if (containerRef) containerRef(el); }} className="rounded-lg overflow-hidden" style={{ height: 480 }} />
       {/* Altitude legend */}
       <div className="flex items-center gap-2 mt-2">
         <span className="text-xs text-gray-600">Low</span>

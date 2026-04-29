@@ -715,17 +715,18 @@ def run_rocketpy(
     except Exception:
         pass
 
-    # Parachute descent speed — mean speed after apogee during descent
+    # Parachute descent speed — use the last 20% of the trajectory (descent under chute)
     main_descent_speed_ms = 0.0
     drogue_descent_speed_ms = 0.0
     try:
         spd_t_src, spd_v_src = _source_cols(flight.speed)
-        apogee_t = float(flight.apogee_time)
-        # Find speeds after apogee
-        post_apogee = spd_v_src[spd_t_src > apogee_t]
-        if len(post_apogee) > 0:
-            # Mean descent speed (lower bound after chute opens)
-            main_descent_speed_ms = float(np.mean(post_apogee[post_apogee < np.percentile(post_apogee, 50)]))
+        if len(spd_t_src) > 10:
+            # Last 20% of flight = descent under chute
+            n = len(spd_t_src)
+            descent = spd_v_src[int(n * 0.8):]
+            descent = descent[np.isfinite(descent)]
+            if len(descent) > 0:
+                main_descent_speed_ms = float(np.median(descent))
     except Exception:
         pass
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import FileUpload from './components/FileUpload';
 import LaunchConfigForm from './components/LaunchConfig';
 import { ComparisonTable } from './components/ComparisonTable';
@@ -147,6 +147,7 @@ export default function App() {
   const [finEdits, setFinEdits] = useState<Record<string, Partial<FinSetInfo>>>({});
   const [resimulating, setResimulating] = useState(false);
   const [waiverRadiusM, setWaiverRadiusM] = useState(1609);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const entry = loadCache();
@@ -365,7 +366,7 @@ export default function App() {
       </header>
 
       <div className={activePage !== 'tools' ? 'hidden' : ''}>
-        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} selectedFile={selectedFile} waiverRadiusM={waiverRadiusM} />
+        <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} selectedFile={selectedFile} waiverRadiusM={waiverRadiusM} mapContainerRef={mapContainerRef.current} />
       </div>
 
       <main className={`max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1 ${activePage !== 'main' ? 'hidden' : ''}`}>
@@ -574,6 +575,7 @@ export default function App() {
               launchDateTime={config.weatherDateTime}
               hourlyLandings={results.hourly_landings}
               waiverRadiusM={waiverRadiusM || undefined}
+              containerRef={(el) => { mapContainerRef.current = el; }}
             />
             <div className="flex items-center gap-2 text-xs mt-1">
               <label className="text-gray-400">FAA waiver radius</label>

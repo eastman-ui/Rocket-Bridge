@@ -546,13 +546,6 @@ export default function App() {
         {/* Full-width: charts + 3D (only when results) */}
         {appState === 'results' && results && rpy && or_ && (
           <>
-            <TimeSeriesCharts
-              orTimeseries={or_.timeseries}
-              rocketPyTimeseries={rpy.timeseries}
-              burnOutTimeS={rpy.burn_out_time_s}
-              unitSystem={unitSystem}
-              stabilityUnit={stabilityUnit}
-            />
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <TrajectoryPlot
                 trajectory={rpy.trajectory_3d}
@@ -601,6 +594,13 @@ export default function App() {
                 >clear</button>
               )}
             </div>
+            <TimeSeriesCharts
+              orTimeseries={or_.timeseries}
+              rocketPyTimeseries={rpy.timeseries}
+              burnOutTimeS={rpy.burn_out_time_s}
+              unitSystem={unitSystem}
+              stabilityUnit={stabilityUnit}
+            />
           </>
         )}
       </main>

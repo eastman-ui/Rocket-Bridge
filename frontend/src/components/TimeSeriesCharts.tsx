@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import PlotlyImport from 'react-plotly.js';
 const Plot = (PlotlyImport as any).default ?? PlotlyImport;
 import type { TimeSeriesData } from '../types';
@@ -143,10 +144,24 @@ export function TimeSeriesCharts({
     fillcolor: 'rgba(251,146,60,0.15)',
   }];
 
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <div className="bg-gray-900 rounded-xl p-4">
-      <h2 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">Flight Data</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center gap-2 w-full text-left"
+      >
+        <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Flight Data</h2>
+        <svg
+          className={`w-4 h-4 text-gray-500 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+      {expanded && (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
         <div className="w-full">
           <Plot
             data={altitudeData as any}
@@ -196,6 +211,7 @@ export function TimeSeriesCharts({
           />
         </div>
       </div>
+      )}
     </div>
   );
 }

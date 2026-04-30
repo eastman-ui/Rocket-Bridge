@@ -397,7 +397,11 @@ def _fix_motor_grain_geometry(params: dict) -> None:
         pass  # already covered — if freeform fins were injected, they're now in trapezoidal_fins
 
     # Rail button fallbacks
-    for i, rb in enumerate(params.get("rail_buttons", []) or []):
+    _rb_raw = params.get("rail_buttons", []) or []
+    if isinstance(_rb_raw, dict):
+        _rb_raw = [_rb_raw] if ("upper_button_position" in _rb_raw or "upper_position" in _rb_raw) else list(_rb_raw.values())
+    rb_list = [rb for rb in _rb_raw if isinstance(rb, dict)]
+    for i, rb in enumerate(rb_list):
         upper = float(rb.get("upper_position", rb.get("upper_button_position", 0)) or 0)
         lower = float(rb.get("lower_position", rb.get("lower_button_position", 0)) or 0)
         if upper == 0 and lower == 0:

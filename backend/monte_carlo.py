@@ -236,8 +236,11 @@ def _mc_flight(
         except Exception:
             pass
 
-    # Rail buttons
-    for rb in params.get("rail_buttons", []):
+    # Rail buttons — rocketserializer may export as flat dict (single set) or list
+    _rb_raw = params.get("rail_buttons", []) or []
+    if isinstance(_rb_raw, dict):
+        _rb_raw = [_rb_raw] if ("upper_button_position" in _rb_raw or "upper_position" in _rb_raw) else list(_rb_raw.values())
+    for rb in (rb for rb in _rb_raw if isinstance(rb, dict)):
         try:
             rocket.set_rail_buttons(
                 upper_button_position=float(rb.get("upper_position", rb.get("upper_button_position", 0)) or 0),

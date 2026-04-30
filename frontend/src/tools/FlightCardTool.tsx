@@ -132,6 +132,7 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
             zoomControl: false,
             attributionControl: false,
             zoomAnimation: false,
+            preferCanvas: true,
           });
 
           // ESRI satellite tiles + label overlay (same as TrajectoryMap)
@@ -428,7 +429,7 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
       y2 += sectionH + 1.5;
       try {
         const mcW = CW;
-        const mcH = mcW * 0.55;
+        const mcH = mcW * 0.7;
         doc.addImage(mcImage, 'PNG', LM, y2, mcW, mcH);
         y2 += mcH + 4;
       } catch { /* skip */ }

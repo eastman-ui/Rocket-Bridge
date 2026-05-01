@@ -43,7 +43,7 @@ function toMetric(param: SweepParam, valDisp: number, imp: boolean) {
   return LENGTH_PARAMS.has(param) && imp ? valDisp / M_FT : valDisp;
 }
 
-export function ParameterSweepTool({ result, config, unitSystem, selectedFile }: Props) {
+export function ParameterSweepTool({ config, unitSystem, selectedFile }: Props) {
   const imp = unitSystem === 'imperial';
   const [param, setParam] = useState<SweepParam>('inclination');
   // sweepMin/sweepMax stored in display units (ft when imperial for length params)

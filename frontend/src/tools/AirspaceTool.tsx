@@ -67,7 +67,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
   const [showAc, setShowAc] = useState(true);
   const [showNotam, setShowNotam] = useState(true);
   const [radius, setRadius] = useState(1.0); // degrees
-  const [altFilter, setAltFilter] = useState<[number, number]>([0, 18000]); // meters
+  const [altFilter] = useState<[number, number]>([0, 18000]); // meters
   const [localLat, setLocalLat] = useState(config.lat);
   const [localLon, setLocalLon] = useState(config.lon);
   const [mapReady, setMapReady] = useState(false);
@@ -223,7 +223,7 @@ export function AirspaceTool({ config, unitSystem, apogeeM }: Props) {
         const r = (n.radius ?? 5) * 1852; // nm → m
         L.circle([n.coordinates.lat, n.coordinates.lon], {
           radius: r, color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.1, weight: 1.5,
-        }).bindPopup(`<b>${n.notamID}</b><br>${(n.text ?? '').slice(0, 200)}`).addLayer(layer);
+        }).bindPopup(`<b>${n.notamID}</b><br>${(n.text ?? '').slice(0, 200)}`).addTo(layer);
       }
     });
   }, [notams, showNotam, mapReady]);

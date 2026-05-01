@@ -17,10 +17,9 @@ interface Props {
 
 const M_FT = 3.28084;
 const MS_FTS = 3.28084;
-const N_LBF = 0.224809;
 const MI_M = 1609.34;
 
-export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hourlyLandings, selectedFile, mapContainerRef, weatherData }: Props) {
+export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, selectedFile, mapContainerRef, weatherData }: Props) {
   const imp = unitSystem === 'imperial';
   const rpy = result.rocketpy_results;
   const or_ = result.or_results;
@@ -266,10 +265,6 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
                    'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
     return dirs[Math.round(deg / 22.5) % 16];
   }
-  function dirColor(deg: number): string {
-    const hue = (210 + deg) % 360;
-    return `hsl(${hue},70%,55%)`;
-  }
   function hslToRgb(h: number, s: number, l: number): [number, number, number] {
     s /= 100; l /= 100;
     const k = (n: number) => (n + h / 30) % 12;
@@ -284,14 +279,6 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
     if (pct < 88) return 'BKN';
     return 'OVC';
   }
-  function cloudColor(pct: number): [number, number, number] {
-    if (pct < 5)  return [156, 163, 175]; // gray
-    if (pct < 25) return [96, 165, 250];  // blue
-    if (pct < 50) return [250, 204, 21];  // yellow
-    if (pct < 88) return [251, 146, 60];  // orange
-    return [239, 68, 68]; // red
-  }
-
   const handleExport = async () => {
     const { jsPDF } = await import('jspdf');
     const autoTable = (await import('jspdf-autotable')).default;
@@ -366,7 +353,7 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
       doc.text('KEY STATISTICS', LM + 2, y + 3.8);
       y += 7;
 
-      const rows: [string, string, string][] = [
+      const rows = ([
         ['Apogee AGL', fmtAlt(rpy.apogee_m_agl), or_?.apogee_m_agl != null ? fmtAlt(or_.apogee_m_agl) : '—'],
         ['Max Velocity', fmtVel(rpy.max_speed_ms), or_?.max_velocity_ms != null ? fmtVel(or_.max_velocity_ms!) : '—'],
         ['Max Mach', `Mach ${rpy.max_mach.toFixed(3)}`, or_?.max_mach != null ? `Mach ${or_.max_mach!.toFixed(3)}` : '—'],
@@ -376,7 +363,7 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
         ['Time to Apogee', `${rpy.apogee_time_s.toFixed(1)} s`, or_?.time_to_apogee_s != null ? `${or_.time_to_apogee_s!.toFixed(1)} s` : '—'],
         ['Drift Distance', driftDist > 0 ? fmtDist(driftDist) : '—', '—'],
         ['FAA Waiver Radius', fmtDist(waiverM), '—'],
-      ].filter(r => r[1] !== '—' || r[2] !== '—');
+      ] as [string, string, string][]).filter(r => r[1] !== '—' || r[2] !== '—');
 
       const tableW = 50 + 55 + 55;
       const tableLM = (W - tableW) / 2;
@@ -511,7 +498,6 @@ export function FlightCardTool({ result, config, unitSystem, waiverRadiusM, hour
         // Layout: both enabled = side-by-side; only one = full width
         const showBoth = exportCfg.showWind && exportCfg.showCloud && sortedAlt.length > 0 && cloudData.length > 0;
         const leftW = showBoth ? CW * 0.6 : CW;
-        const rightW = showBoth ? CW - leftW - 4 : 0;
         const rightX = LM + leftW + 4;
 
         // ── Left: Wind aloft chart ──

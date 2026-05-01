@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 
 const R_GAS = 8.314;   // J/(mol·K)
 const T_AMB = 293;     // K (20°C)
-const M_BP = 0.270;    // kg/mol — FFFG black powder
+const M_BP = 0.1294;   // kg/mol — effective molar mass of FFFG combustion gas products (back-derived from Apogee empirical formula)
 const BACKUP_FACTOR = 1.2;
 
 function calcCharge(
@@ -10,7 +10,9 @@ function calcCharge(
   lenIn: number,
   psiTarget: number
 ): { primary: number; backup: number; volumeIn3: number } | null {
-  if (idIn <= 0 || lenIn <= 0 || psiTarget <= 0) return null;
+  if (!Number.isFinite(idIn) || idIn <= 0 ||
+      !Number.isFinite(lenIn) || lenIn <= 0 ||
+      !Number.isFinite(psiTarget) || psiTarget <= 0) return null;
   const r = idIn / 2;
   const volumeIn3 = Math.PI * r * r * lenIn;
   const volumeM3 = volumeIn3 * 1.6387e-5;        // 1 in³ = 1.6387e-5 m³

@@ -169,13 +169,6 @@ export function AltimeterTool({ result, unitSystem }: Props) {
     line: { color: '#34d399', width: 2 },
   } : null;
 
-  const orVelTrace = or.timeseries ? {
-    x: or.timeseries.time,
-    y: or.timeseries.velocity.map(v => v * velScale),
-    type: 'scatter', mode: 'lines', name: 'OpenRocket',
-    line: { color: '#9ca3af', width: 1.5, dash: 'dash' },
-  } : null;
-
   const chartLayout = (xLabel: string, yLabel: string): any => ({
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
     margin: { t: 10, r: 20, b: 45, l: 55 },
@@ -320,7 +313,7 @@ export function AltimeterTool({ result, unitSystem }: Props) {
         <div>
           <p className="text-[11px] text-gray-500 mb-1.5">Velocity vs Time</p>
           <Plot
-            data={[rpyVelTrace, ...(orVelTrace ? [orVelTrace] : []), ...(altiVelTrace ? [altiVelTrace] : [])] as any}
+            data={[rpyVelTrace, ...(altiVelTrace ? [altiVelTrace] : [])] as any}
             layout={chartLayout('Time (s)', `Velocity (${velUnit})`)}
             config={{ responsive: true, displayModeBar: false }}
             style={{ width: '100%' }}

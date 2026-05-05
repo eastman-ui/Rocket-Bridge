@@ -47,9 +47,9 @@ function parseCSV(text: string): { data: AltimeterData; skipped: number } | { er
 
   if (time.length === 0) return { error: 'No valid data rows found.' };
 
-  // Auto-detect feet: max altitude > 5000 → assume feet, convert to meters
-  const maxAlt = Math.max(...altitude);
-  const isFeet = maxAlt > 5000;
+  // Auto-detect feet: max altitude > 9000 → assume feet, convert to meters
+  const maxAlt = altitude.reduce((m, v) => (v > m ? v : m), -Infinity);
+  const isFeet = maxAlt > 9000;
   const altM = isFeet ? altitude.map(a => a * 0.3048) : altitude;
   const velMs = velIdx !== -1
     ? (isFeet ? velocity.map(v => v * 0.3048) : velocity)
@@ -92,12 +92,19 @@ export function AltimeterTool({ result, unitSystem }: Props) {
   };
 
   // Derived metrics from altimeter data (all stored in meters/m/s)
-  const altiApogeeM = altData ? Math.max(...altData.altitude) : null;
+  const altiApogeeM = altData
+    ? altData.altitude.reduce((m, v) => (v > m ? v : m), -Infinity)
+    : null;
   const altiApogeeIdx = altData && altiApogeeM !== null
     ? altData.altitude.indexOf(altiApogeeM)
     : -1;
   const altiApogeeT = altiApogeeIdx >= 0 ? altData!.time[altiApogeeIdx] : null;
-  const altiMaxVelMs = altData?.velocity ? Math.max(...altData.velocity) : null;
+  const altiMaxVelMs = altData?.velocity
+    ? (() => {
+        const max = altData.velocity!.reduce((m, v) => (Number.isFinite(v) && v > m ? v : m), -Infinity);
+        return Number.isFinite(max) ? max : null;
+      })()
+    : null;
 
   const scale = imp ? 3.28084 : 1;
   const unit = imp ? 'ft' : 'm';
@@ -106,20 +113,24 @@ export function AltimeterTool({ result, unitSystem }: Props) {
 
   function deltaCell(altiM: number | null, simM: number) {
     if (altiM === null) return { text: '—', color: 'text-gray-600' };
+    if (simM === 0) return { text: '—', color: 'text-gray-600' };
     const diff = (altiM - simM) * scale;
     const pct = Math.abs((altiM - simM) / simM) * 100;
-    const sign = diff >= 0 ? '+' : '';
+    const diffSign = diff >= 0 ? '+' : '';
+    const pctSign = diff >= 0 ? '+' : '-';
     const color = pct <= 5 ? 'text-green-400' : pct <= 15 ? 'text-amber-400' : 'text-red-400';
-    return { text: `${sign}${diff.toFixed(0)} ${unit} (${sign}${pct.toFixed(1)}%)`, color };
+    return { text: `${diffSign}${diff.toFixed(0)} ${unit} (${pctSign}${pct.toFixed(1)}%)`, color };
   }
 
   function timeDelta(altiT: number | null, simT: number) {
     if (altiT === null) return { text: '—', color: 'text-gray-600' };
+    if (simT === 0) return { text: '—', color: 'text-gray-600' };
     const diff = altiT - simT;
     const pct = Math.abs(diff / simT) * 100;
-    const sign = diff >= 0 ? '+' : '';
+    const diffSign = diff >= 0 ? '+' : '';
+    const pctSign = diff >= 0 ? '+' : '-';
     const color = pct <= 5 ? 'text-green-400' : pct <= 15 ? 'text-amber-400' : 'text-red-400';
-    return { text: `${sign}${diff.toFixed(1)} s (${sign}${pct.toFixed(1)}%)`, color };
+    return { text: `${diffSign}${diff.toFixed(1)} s (${pctSign}${pct.toFixed(1)}%)`, color };
   }
 
   // Chart traces
@@ -156,6 +167,13 @@ export function AltimeterTool({ result, unitSystem }: Props) {
     y: altData.velocity.map(v => v * velScale),
     type: 'scatter', mode: 'lines', name: 'Altimeter',
     line: { color: '#34d399', width: 2 },
+  } : null;
+
+  const orVelTrace = or.timeseries ? {
+    x: or.timeseries.time,
+    y: or.timeseries.velocity.map(v => v * velScale),
+    type: 'scatter', mode: 'lines', name: 'OpenRocket',
+    line: { color: '#9ca3af', width: 1.5, dash: 'dash' },
   } : null;
 
   const chartLayout = (xLabel: string, yLabel: string): any => ({
@@ -231,7 +249,7 @@ export function AltimeterTool({ result, unitSystem }: Props) {
           </pre>
           <p className="text-gray-600">
             Headers required (case-insensitive) · time in seconds · altitude in m or ft
-            (auto-detected: max &gt; 5000 treated as ft) · velocity optional
+            (auto-detected: max &gt; 9000 treated as ft) · velocity optional
           </p>
         </div>
       </details>
@@ -302,7 +320,7 @@ export function AltimeterTool({ result, unitSystem }: Props) {
         <div>
           <p className="text-[11px] text-gray-500 mb-1.5">Velocity vs Time</p>
           <Plot
-            data={[rpyVelTrace, altiVelTrace!] as any}
+            data={[rpyVelTrace, ...(orVelTrace ? [orVelTrace] : []), ...(altiVelTrace ? [altiVelTrace] : [])] as any}
             layout={chartLayout('Time (s)', `Velocity (${velUnit})`)}
             config={{ responsive: true, displayModeBar: false }}
             style={{ width: '100%' }}

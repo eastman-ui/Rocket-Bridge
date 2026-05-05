@@ -41,7 +41,7 @@ function parseCSV(text: string): { data: AltimeterData; skipped: number } | { er
     altitude.push(a);
     if (velIdx !== -1) {
       const v = parseFloat(cols[velIdx]);
-      velocity.push(Number.isFinite(v) ? v : 0);
+      velocity.push(Number.isFinite(v) ? v : NaN);
     }
   }
 

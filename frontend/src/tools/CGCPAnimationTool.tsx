@@ -21,9 +21,8 @@ export function CGCPAnimationTool({ result }: Props) {
   const params = result.rocket_params;
   const ts = rpy.timeseries;
 
-  const lengthM = params?.length_m ?? 2.0;
-  const diamM = params?.diameter_m ?? 0.1;
   const burnEnd = rpy.burn_out_time_s;
+  const stabArray = ts.stability;
 
   // Last index within the burn window
   const burnIdxEnd = useMemo(() => {
@@ -34,31 +33,17 @@ export function CGCPAnimationTool({ result }: Props) {
     return idx;
   }, [ts.time, burnEnd]);
 
-  const [timeIdx, setTimeIdx] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const rafRef = useRef<number | null>(null);
-  const lastRealTime = useRef<number | null>(null);
-
-  const CP_m = CP_NORM * lengthM;
-  const CP_x = SVG_X0 + CP_NORM * SVG_W;
-
-  const stabArray = ts.stability;
-
   const minStability = useMemo(
     () => stabArray.slice(0, burnIdxEnd + 1).reduce((m, v) => (Number.isFinite(v) && v < m ? v : m), Infinity),
     [stabArray, burnIdxEnd]
   );
 
-  function getCGX(idx: number) {
-    const stab = stabArray[Math.min(idx, stabArray.length - 1)];
-    const cgM = CP_m - stab * diamM;
-    return SVG_X0 + (cgM / lengthM) * SVG_W;
-  }
-
-  const cgX = getCGX(timeIdx);
-  const currentStab = stabArray[Math.min(timeIdx, stabArray.length - 1)] ?? 0;
-  const cgInches = (CP_m - currentStab * diamM) * 39.3701;
-  const currentT = ts.time[Math.min(timeIdx, ts.time.length - 1)] ?? 0;
+  const [timeIdx, setTimeIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const rafRef = useRef<number | null>(null);
+  const lastRealTime = useRef<number | null>(null);
+  const tsTimeRef = useRef(ts.time);
+  useEffect(() => { tsTimeRef.current = ts.time; }, [ts.time]);
 
   // Animation loop
   useEffect(() => {
@@ -73,28 +58,72 @@ export function CGCPAnimationTool({ result }: Props) {
       const dtReal = (realNow - lastRealTime.current) / 1000;
       lastRealTime.current = realNow;
 
+      const dtSim = dtReal * SIM_SPEED;
+      // reachedEnd is set inside the updater and read after — safe in non-concurrent React
+      let reachedEnd = false;
+
       setTimeIdx(prev => {
-        const dtSim = dtReal * SIM_SPEED;
-        const targetSim = ts.time[prev] + dtSim;
+        const targetSim = tsTimeRef.current[prev] + dtSim;
         let next = prev;
-        while (next < burnIdxEnd && ts.time[next + 1] <= targetSim) next++;
+        while (next < burnIdxEnd && tsTimeRef.current[next + 1] <= targetSim) next++;
         if (next >= burnIdxEnd) {
-          setPlaying(false);
+          reachedEnd = true;
           return burnIdxEnd;
         }
         return next;
       });
+
+      if (reachedEnd) {
+        setPlaying(false);
+        return;
+      }
 
       rafRef.current = requestAnimationFrame(tick);
     }
 
     rafRef.current = requestAnimationFrame(tick);
     return () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); };
-  }, [playing, burnIdxEnd, ts.time]);
+  }, [playing, burnIdxEnd]);
+
+  // Guard: empty stability data
+  if (!stabArray.length) {
+    return (
+      <div className="space-y-4">
+        <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">CG/CP Stability Animation</h3>
+        <p className="text-xs text-red-400">No stability timeseries data available for this simulation.</p>
+      </div>
+    );
+  }
+
+  // Guard: missing rocket_params
+  if (!params) {
+    return (
+      <div className="space-y-4">
+        <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">CG/CP Stability Animation</h3>
+        <p className="text-xs text-amber-400">Rocket dimensions not available — re-run the simulation to enable this tool.</p>
+      </div>
+    );
+  }
+  const lengthM = params.length_m;
+  const diamM = params.diameter_m;
+
+  const CP_m = CP_NORM * lengthM;
+  const CP_x = SVG_X0 + CP_NORM * SVG_W;
+
+  function getCGX(idx: number) {
+    const stab = stabArray[Math.min(idx, stabArray.length - 1)];
+    const cgM = CP_m - stab * diamM;
+    return SVG_X0 + (cgM / lengthM) * SVG_W;
+  }
+
+  const cgX = getCGX(timeIdx);
+  const currentStab = stabArray[Math.min(timeIdx, stabArray.length - 1)] ?? 0;
+  const cgInches = (CP_m - currentStab * diamM) * 39.3701;
+  const currentT = ts.time[Math.min(timeIdx, ts.time.length - 1)] ?? 0;
 
   function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
     setPlaying(false);
-    setTimeIdx(parseInt(e.target.value));
+    setTimeIdx(parseInt(e.target.value, 10));
   }
 
   function togglePlay() {

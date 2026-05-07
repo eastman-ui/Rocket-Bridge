@@ -170,6 +170,15 @@ export function LiveTrackingTool({ unitSystem }: Props) {
     return () => { map.remove(); leafletMap.current = null; };
   }, []);
 
+  // ── Map resize observer (fixes blank map on tab switch) ───────────────────
+  useEffect(() => {
+    const div = mapDivRef.current;
+    if (!div) return;
+    const ro = new ResizeObserver(() => { leafletMap.current?.invalidateSize(); });
+    ro.observe(div);
+    return () => ro.disconnect();
+  }, []);
+
   // ── Waiver circle (redraws when config changes) ───────────────────────────
   useEffect(() => {
     const map = leafletMap.current;
@@ -184,6 +193,7 @@ export function LiveTrackingTool({ unitSystem }: Props) {
       color: '#ef4444', weight: 2, opacity: 0.8, dashArray: '8 6',
       fillColor: '#ef4444', fillOpacity: 0.06,
     }).addTo(map);
+    return () => { if (waiverCircle.current) { map.removeLayer(waiverCircle.current); waiverCircle.current = null; } };
   }, [launchLat, launchLon, waiverFt]);
 
   // ── Launch marker (redraws when lat/lon change) ───────────────────────────
@@ -201,6 +211,7 @@ export function LiveTrackingTool({ unitSystem }: Props) {
       }),
     }).bindPopup('<b>Launch Site</b>').addTo(map);
     map.panTo([lat, lon]);
+    return () => { if (launchMarker.current) { map.removeLayer(launchMarker.current); launchMarker.current = null; } };
   }, [launchLat, launchLon]);
 
   // ── Imperative track update ────────────────────────────────────────────────
@@ -208,9 +219,8 @@ export function LiveTrackingTool({ unitSystem }: Props) {
     const map = leafletMap.current;
     if (!map) return;
     const n = allPoints.length;
-    const alts = allPoints.map(p => p.alt_m);
-    const minAlt = Math.min(...alts);
-    const maxAlt = Math.max(...alts);
+    const minAlt = allPoints.reduce((m, p) => p.alt_m < m ? p.alt_m : m, Infinity);
+    const maxAlt = allPoints.reduce((m, p) => p.alt_m > m ? p.alt_m : m, -Infinity);
     const altRange = maxAlt - minAlt || 1;
 
     if (n >= 2) {

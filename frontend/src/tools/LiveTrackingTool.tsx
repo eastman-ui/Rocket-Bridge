@@ -254,3 +254,84 @@ export function LiveTrackingTool({ unitSystem }: Props) {
       }).bindPopup('<b>Predicted Landing</b>').addTo(map);
     }
   }, []);
+
+  // ── Serial connection ──────────────────────────────────────────────────────
+  async function connect() {
+    if (!HAS_SERIAL) return;
+    try {
+      const port = await (navigator as any).serial.requestPort();
+      await port.open({ baudRate });
+      portRef.current = port;
+      t0Ref.current = Date.now() / 1000;
+      setStatus('connected');
+      const reader = port.readable.getReader();
+      readerRef.current = reader;
+      const decoder = new TextDecoder();
+      let buf = '';
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          for (const line of lines) {
+            const pt = parseGpsLine(line, t0Ref.current);
+            if (!pt) continue;
+            if (pt.rssi != null) setLastRssi(pt.rssi);
+            setStatus('live');
+            setPoints(prev => {
+              const next = [...prev, pt];
+              if (prev.length === 0) {
+                setLaunchLat(String(pt.lat));
+                setLaunchLon(String(pt.lon));
+              }
+              addPointToMap(pt, next);
+              return next;
+            });
+          }
+        }
+      } catch { /* serial read error or device unplugged */ }
+      finally { reader.releaseLock(); }
+    } catch { /* user denied port access */ }
+    setStatus('disconnected');
+    portRef.current = null;
+    readerRef.current = null;
+  }
+
+  async function disconnect() {
+    try { await readerRef.current?.cancel(); } catch { /* ignore */ }
+    try { await portRef.current?.close(); } catch { /* ignore */ }
+    setStatus('disconnected');
+    portRef.current = null;
+    readerRef.current = null;
+  }
+
+  function clearTrack() {
+    const map = leafletMap.current;
+    if (map) {
+      trackSegs.current.forEach(s => map.removeLayer(s));
+      if (posMarker.current) { map.removeLayer(posMarker.current); posMarker.current = null; }
+      if (landingMarker.current) { map.removeLayer(landingMarker.current); landingMarker.current = null; }
+    }
+    trackSegs.current = [];
+    setPoints([]);
+    setLastRssi(null);
+  }
+
+  function exportCsv() {
+    const rows = ['time_s,lat,lon,alt_m,speed_ms,heading_deg,rssi'];
+    for (const p of points) {
+      rows.push([
+        p.t.toFixed(2), p.lat, p.lon, p.alt_m,
+        p.speed_ms ?? '', p.heading_deg ?? '', p.rssi ?? '',
+      ].join(','));
+    }
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gps_track_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }

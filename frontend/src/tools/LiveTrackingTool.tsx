@@ -31,6 +31,7 @@ function enuToLatLon(x: number, y: number, launchLat: number, launchLon: number)
 }
 
 function altColor(frac: number): string {
+  frac = Math.max(0, Math.min(1, frac));
   const stops: [number, [number, number, number]][] = [
     [0.00, [59, 130, 246]],
     [0.33, [34, 211, 238]],

@@ -128,3 +128,119 @@ function rocketIcon(heading?: number): L.DivIcon {
 
 const BAUD_RATES = [4800, 9600, 38400, 57600, 115200];
 const HAS_SERIAL = typeof navigator !== 'undefined' && 'serial' in navigator;
+
+export function LiveTrackingTool({ unitSystem }: Props) {
+  const imp = unitSystem === 'imperial';
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  const [status, setStatus] = useState<Status>('disconnected');
+  const [baudRate, setBaudRate] = useState(115200);
+  const [points, setPoints] = useState<GpsPoint[]>([]);
+  const [launchLat, setLaunchLat] = useState('');
+  const [launchLon, setLaunchLon] = useState('');
+  const [waiverFt, setWaiverFt] = useState('');
+  const [configOpen, setConfigOpen] = useState(true);
+  const [lastRssi, setLastRssi] = useState<number | null>(null);
+
+  // ── Refs ──────────────────────────────────────────────────────────────────
+  const mapDivRef = useRef<HTMLDivElement>(null);
+  const leafletMap = useRef<L.Map | null>(null);
+  const trackSegs = useRef<L.Polyline[]>([]);
+  const posMarker = useRef<L.Marker | null>(null);
+  const launchMarker = useRef<L.Marker | null>(null);
+  const waiverCircle = useRef<L.Circle | null>(null);
+  const landingMarker = useRef<L.Marker | null>(null);
+  const portRef = useRef<any>(null);
+  const readerRef = useRef<any>(null);
+  const t0Ref = useRef<number>(0);
+
+  // ── Map init ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapDivRef.current || leafletMap.current) return;
+    const map = L.map(mapDivRef.current, { center: [39.0, -104.0], zoom: 13, zoomAnimation: false });
+    leafletMap.current = map;
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { attribution: '© Esri', maxZoom: 19 }
+    ).addTo(map);
+    L.tileLayer(
+      'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19, opacity: 0.7 }
+    ).addTo(map);
+    return () => { map.remove(); leafletMap.current = null; };
+  }, []);
+
+  // ── Waiver circle (redraws when config changes) ───────────────────────────
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map) return;
+    if (waiverCircle.current) { map.removeLayer(waiverCircle.current); waiverCircle.current = null; }
+    const lat = parseFloat(launchLat);
+    const lon = parseFloat(launchLon);
+    const radiusM = parseFloat(waiverFt) * 0.3048;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !(radiusM > 0)) return;
+    waiverCircle.current = L.circle([lat, lon], {
+      radius: radiusM,
+      color: '#ef4444', weight: 2, opacity: 0.8, dashArray: '8 6',
+      fillColor: '#ef4444', fillOpacity: 0.06,
+    }).addTo(map);
+  }, [launchLat, launchLon, waiverFt]);
+
+  // ── Launch marker (redraws when lat/lon change) ───────────────────────────
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map) return;
+    if (launchMarker.current) { map.removeLayer(launchMarker.current); launchMarker.current = null; }
+    const lat = parseFloat(launchLat);
+    const lon = parseFloat(launchLon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    launchMarker.current = L.marker([lat, lon], {
+      icon: L.divIcon({
+        html: '<div style="width:12px;height:12px;background:#34d399;border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5)"></div>',
+        className: '', iconSize: [12, 12], iconAnchor: [6, 6],
+      }),
+    }).bindPopup('<b>Launch Site</b>').addTo(map);
+    map.panTo([lat, lon]);
+  }, [launchLat, launchLon]);
+
+  // ── Imperative track update ────────────────────────────────────────────────
+  const addPointToMap = useCallback((point: GpsPoint, allPoints: GpsPoint[]) => {
+    const map = leafletMap.current;
+    if (!map) return;
+    const n = allPoints.length;
+    const alts = allPoints.map(p => p.alt_m);
+    const minAlt = Math.min(...alts);
+    const maxAlt = Math.max(...alts);
+    const altRange = maxAlt - minAlt || 1;
+
+    if (n >= 2) {
+      const prev = allPoints[n - 2];
+      const frac = (point.alt_m - minAlt) / altRange;
+      trackSegs.current.push(
+        L.polyline([[prev.lat, prev.lon], [point.lat, point.lon]], {
+          color: altColor(frac), weight: 3, opacity: 0.9,
+        }).addTo(map)
+      );
+    }
+
+    if (posMarker.current) {
+      posMarker.current.setLatLng([point.lat, point.lon]);
+      posMarker.current.setIcon(rocketIcon(point.heading_deg));
+    } else {
+      posMarker.current = L.marker([point.lat, point.lon], { icon: rocketIcon(point.heading_deg) })
+        .bindPopup('<b>Rocket</b>').addTo(map);
+    }
+
+    map.panTo([point.lat, point.lon], { animate: true, duration: 0.5 });
+
+    if (landingMarker.current) { map.removeLayer(landingMarker.current); landingMarker.current = null; }
+    const pred = predictLanding(allPoints);
+    if (pred) {
+      landingMarker.current = L.marker(pred, {
+        icon: L.divIcon({
+          html: '<div style="width:12px;height:12px;background:#f59e0b;border-radius:50%;border:2px solid #fff;box-shadow:0 0 6px rgba(245,158,11,.8)"></div>',
+          className: '', iconSize: [12, 12], iconAnchor: [6, 6],
+        }),
+      }).bindPopup('<b>Predicted Landing</b>').addTo(map);
+    }
+  }, []);

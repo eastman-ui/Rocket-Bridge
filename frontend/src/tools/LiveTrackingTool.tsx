@@ -153,6 +153,8 @@ export function LiveTrackingTool({ unitSystem }: Props) {
   const portRef = useRef<any>(null);
   const readerRef = useRef<any>(null);
   const t0Ref = useRef<number>(0);
+  const connectingRef = useRef(false);
+  const pointsRef = useRef<GpsPoint[]>([]);
 
   // ── Map init ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -257,7 +259,8 @@ export function LiveTrackingTool({ unitSystem }: Props) {
 
   // ── Serial connection ──────────────────────────────────────────────────────
   async function connect() {
-    if (!HAS_SERIAL) return;
+    if (!HAS_SERIAL || portRef.current || connectingRef.current) return;
+    connectingRef.current = true;
     try {
       const port = await (navigator as any).serial.requestPort();
       await port.open({ baudRate });
@@ -280,23 +283,24 @@ export function LiveTrackingTool({ unitSystem }: Props) {
             if (!pt) continue;
             if (pt.rssi != null) setLastRssi(pt.rssi);
             setStatus('live');
-            setPoints(prev => {
-              const next = [...prev, pt];
-              if (prev.length === 0) {
-                setLaunchLat(String(pt.lat));
-                setLaunchLon(String(pt.lon));
-              }
-              addPointToMap(pt, next);
-              return next;
-            });
+            if (pointsRef.current.length === 0) {
+              setLaunchLat(String(pt.lat));
+              setLaunchLon(String(pt.lon));
+            }
+            const next = [...pointsRef.current, pt];
+            pointsRef.current = next;
+            setPoints(next);
+            addPointToMap(pt, next);
           }
         }
       } catch { /* serial read error or device unplugged */ }
       finally { reader.releaseLock(); }
+      try { await port.close(); } catch { /* ignore */ }
     } catch { /* user denied port access */ }
     setStatus('disconnected');
     portRef.current = null;
     readerRef.current = null;
+    connectingRef.current = false;
   }
 
   async function disconnect() {
@@ -315,6 +319,7 @@ export function LiveTrackingTool({ unitSystem }: Props) {
       if (landingMarker.current) { map.removeLayer(landingMarker.current); landingMarker.current = null; }
     }
     trackSegs.current = [];
+    pointsRef.current = [];
     setPoints([]);
     setLastRssi(null);
   }

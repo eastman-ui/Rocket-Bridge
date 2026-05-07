@@ -25,8 +25,8 @@ const BRACKET_LABEL_Y = 0.93 * IMG_H; // 372
 // CP placed at 65% of rocket length from nose (normalized approximation)
 const CP_NORM = 0.65;
 
-// Animation: 1 real second = 2 sim seconds
-const SIM_SPEED = 2.0;
+// Animation: 1 real second = 0.75 sim seconds (slower than real time — easier to follow)
+const SIM_SPEED = 0.75;
 
 export function CGCPAnimationTool({ result, unitSystem }: Props) {
   const rpy = result.rocketpy_results;
@@ -169,8 +169,8 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
         CG/CP Stability Animation
       </h3>
       <p className="text-xs text-gray-500">
-        CG migrates aft as propellant burns. CP fixed at ~65% of rocket length (approximation).
-        Stability = (CP − CG) / diameter.
+        CG migrates forward (toward nose) as propellant burns off, increasing stability.
+        CP is fixed. Stability = (CP − CG) / diameter.
       </p>
 
       {/* Rocket diagram + animated overlay */}
@@ -181,12 +181,13 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
           style={{ display: 'block' }}
         >
           {diagram ? (
-            /* OR diagram as background */
+            /* OR diagram as background — slightly dimmed so animated overlay stands out */
             <image
               href={`data:image/png;base64,${diagram}`}
               x={0} y={0}
               width={IMG_W} height={IMG_H}
               preserveAspectRatio="xMidYMid meet"
+              opacity={0.65}
             />
           ) : (
             /* Fallback: hand-drawn rocket */
@@ -212,13 +213,17 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
 
           {/* CP marker — fixed, green */}
           <line x1={CP_x} y1={LINE_Y1} x2={CP_x} y2={LINE_Y2}
-            stroke="#34d399" strokeWidth="3" strokeDasharray="10 6" />
+            stroke="#34d399" strokeWidth="4" strokeDasharray="12 7" />
+          <rect x={CP_x - 36} y={LABEL_Y_TOP - 28} width={72} height={32}
+            rx={6} fill="#052e16" opacity={0.85} />
           <text x={CP_x} y={LABEL_Y_TOP} textAnchor="middle"
             fill="#34d399" fontSize="26" fontWeight="bold">CP</text>
 
           {/* CG marker — animated, amber */}
           <line x1={cgX} y1={LINE_Y1} x2={cgX} y2={LINE_Y2}
-            stroke="#f59e0b" strokeWidth="3" strokeDasharray="10 6" />
+            stroke="#f59e0b" strokeWidth="4" strokeDasharray="12 7" />
+          <rect x={cgX - 36} y={LABEL_Y_TOP - 28} width={72} height={32}
+            rx={6} fill="#1c1000" opacity={0.85} />
           <text x={cgX} y={LABEL_Y_TOP} textAnchor="middle"
             fill="#f59e0b" fontSize="26" fontWeight="bold">CG</text>
 
@@ -226,13 +231,13 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
           <line x1={bracketLeft} y1={BRACKET_Y} x2={bracketRight} y2={BRACKET_Y}
             stroke="#64748b" strokeWidth="2" />
           <text x={bracketMid} y={BRACKET_LABEL_Y} textAnchor="middle"
-            fill="#64748b" fontSize="22">
+            fill="#94a3b8" fontSize="22" fontWeight="bold">
             {currentStab.toFixed(2)} cal
           </text>
         </svg>
         <div className="flex gap-5 text-[11px] px-3 pb-2 pt-1">
           <span className="text-green-400">— CP (fixed)</span>
-          <span className="text-amber-400">-- CG (moves aft as propellant burns)</span>
+          <span className="text-amber-400">-- CG (moves forward toward nose as propellant burns)</span>
         </div>
       </div>
 

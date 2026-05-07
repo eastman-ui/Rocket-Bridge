@@ -3,6 +3,7 @@ import type { ComparisonResponse } from '../types';
 
 interface Props {
   result: ComparisonResponse;
+  unitSystem: 'imperial' | 'metric';
 }
 
 // SVG coordinate constants
@@ -16,12 +17,13 @@ const CP_NORM = 0.65;
 // Animation: 1 real second = 2 sim seconds
 const SIM_SPEED = 2.0;
 
-export function CGCPAnimationTool({ result }: Props) {
+export function CGCPAnimationTool({ result, unitSystem }: Props) {
   const rpy = result.rocketpy_results;
   const params = result.rocket_params;
   const ts = rpy.timeseries;
 
   const burnEnd = rpy.burn_out_time_s;
+  const imp = unitSystem === 'imperial';
   const stabArray = ts.stability;
 
   // Last index within the burn window
@@ -118,7 +120,10 @@ export function CGCPAnimationTool({ result }: Props) {
 
   const cgX = getCGX(timeIdx);
   const currentStab = stabArray[Math.min(timeIdx, stabArray.length - 1)] ?? 0;
-  const cgInches = (CP_m - currentStab * diamM) * 39.3701;
+  const cgDisplay = imp
+    ? (CP_m - currentStab * diamM) * 39.3701   // inches
+    : (CP_m - currentStab * diamM) * 100;        // centimeters
+  const cgUnit = imp ? 'in' : 'cm';
   const currentT = ts.time[Math.min(timeIdx, ts.time.length - 1)] ?? 0;
 
   function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
@@ -217,7 +222,7 @@ export function CGCPAnimationTool({ result }: Props) {
         </div>
         <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 text-center">
           <p className="text-[10px] text-gray-500 uppercase mb-1">CG position</p>
-          <p className="text-lg font-mono font-bold text-amber-400">{cgInches.toFixed(1)} in</p>
+          <p className="text-lg font-mono font-bold text-amber-400">{cgDisplay.toFixed(1)} {cgUnit}</p>
         </div>
         <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 text-center">
           <p className="text-[10px] text-gray-500 uppercase mb-1">Min margin</p>

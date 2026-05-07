@@ -1,8 +1,5 @@
 import { useState, useMemo } from 'react';
 
-const R_GAS = 8.314;   // J/(mol·K)
-const T_AMB = 293;     // K (20°C)
-const M_BP = 0.1294;   // kg/mol — effective molar mass of FFFG combustion gas products (back-derived from Apogee empirical formula)
 const BACKUP_FACTOR = 1.2;
 
 function calcCharge(
@@ -15,10 +12,9 @@ function calcCharge(
       !Number.isFinite(psiTarget) || psiTarget <= 0) return null;
   const r = idIn / 2;
   const volumeIn3 = Math.PI * r * r * lenIn;
-  const volumeM3 = volumeIn3 * 1.6387e-5;        // 1 in³ = 1.6387e-5 m³
-  const pressurePa = psiTarget * 6894.76;         // 1 PSI = 6894.76 Pa
-  const moles = (pressurePa * volumeM3) / (R_GAS * T_AMB);
-  const primary = moles * M_BP * 1000;            // grams
+  // Apogee/Kosdon empirical formula: W_g = P_psi × V_in³ / 2230
+  // Source: Apogee Components Peak of Flight #153
+  const primary = (psiTarget * volumeIn3) / 2230;
   return { primary, backup: primary * BACKUP_FACTOR, volumeIn3 };
 }
 
@@ -80,7 +76,7 @@ function Compartment({ label, psi }: CompartmentProps) {
             </div>
           </div>
           <p className="text-[10px] text-gray-600">
-            Tube vol: {result.volumeIn3.toFixed(1)} in³ · P·V = n·R·T · FFFG assumed
+            Tube vol: {result.volumeIn3.toFixed(1)} in³ · Formula: W(g) = P(psi) × V(in³) / 2230 · Apogee/Kosdon empirical
           </p>
         </div>
       ) : (
@@ -101,6 +97,9 @@ export function EjectionChargeTool() {
       <p className="text-xs text-gray-500">
         Calculates FFFG black powder mass for tube pressurization using P·V = n·R·T.
         Backup charge is primary × 1.2. Always in inches / PSI (HPR convention).
+      </p>
+      <p className="text-xs text-amber-500/80">
+        Starting point only — always ground test before flight and confirm with your RSO.
       </p>
 
       <div className="flex items-center gap-3">

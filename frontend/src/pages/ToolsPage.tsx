@@ -238,7 +238,7 @@ export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiv
         </div>
         {cachedResult && (
           <div style={activeTool === 'cgcp' ? {} : { display: 'none' }}>
-            <CGCPAnimationTool result={cachedResult} />
+            <CGCPAnimationTool result={cachedResult} unitSystem={unitSystem} />
           </div>
         )}
       </div>

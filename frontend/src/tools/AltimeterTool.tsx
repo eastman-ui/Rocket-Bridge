@@ -77,6 +77,7 @@ export function AltimeterTool({ result, unitSystem }: Props) {
       if ('error' in parsed) {
         setError(parsed.error);
         setAltData(null);
+        setSkipped(0);
       } else {
         setError(null);
         setAltData(parsed.data);

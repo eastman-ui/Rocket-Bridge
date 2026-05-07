@@ -358,7 +358,7 @@ export function LiveTrackingTool({ unitSystem }: Props) {
     { label: 'Speed', value: cur?.speed_ms != null ? `${(cur.speed_ms * speedScale).toFixed(1)} ${speedUnit}` : '—' },
     { label: 'Heading', value: cur?.heading_deg != null ? `${Math.round(cur.heading_deg)}°` : '—' },
     { label: 'Fixes', value: String(points.length) },
-    { label: 'Elapsed', value: cur ? `${cur.t.toFixed(0)} s` : '0 s' },
+    { label: 'Elapsed', value: cur ? `${cur.t.toFixed(0)} s` : '—' },
   ];
 
   return (
@@ -378,7 +378,7 @@ export function LiveTrackingTool({ unitSystem }: Props) {
           disabled={!HAS_SERIAL}
           className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors shrink-0 ${
             connected
-              ? 'bg-red-800 hover:bg-red-700 text-white'
+              ? 'bg-red-800 hover:bg-red-700 text-white disabled:opacity-40 disabled:cursor-not-allowed'
               : 'bg-blue-800 hover:bg-blue-700 text-white disabled:opacity-40 disabled:cursor-not-allowed'
           }`}
         >

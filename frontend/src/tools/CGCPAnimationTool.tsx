@@ -6,10 +6,21 @@ interface Props {
   unitSystem: 'imperial' | 'metric';
 }
 
-// SVG coordinate constants
-const SVG_X0 = 60;   // nose tip x
-const SVG_X1 = 540;  // nozzle trailing edge x
-const SVG_W = SVG_X1 - SVG_X0;  // 480 px — full rocket length span
+// SVG canvas matches matplotlib figsize(13,4) at 100px/in = 1300×400
+// Axes area estimated at x=[6%,97%], y=[12%,82%] of the saved PNG
+// (bbox_inches="tight", y-axis hidden, xlabel + title present)
+const IMG_W = 1300;
+const IMG_H = 400;
+const AX_LEFT = 0.06 * IMG_W;   // ~78 — left of data area
+const AX_RIGHT = 0.97 * IMG_W;  // ~1261 — right of data area
+const AX_W = AX_RIGHT - AX_LEFT;
+
+// Lines span the central band of the axes (clears title + xlabel zones)
+const LINE_Y1 = 0.22 * IMG_H;       // 88
+const LINE_Y2 = 0.73 * IMG_H;       // 292
+const LABEL_Y_TOP = 0.13 * IMG_H;   // 52  — label above line
+const BRACKET_Y = 0.82 * IMG_H;     // 328 — bracket below body
+const BRACKET_LABEL_Y = 0.93 * IMG_H; // 372
 
 // CP placed at 65% of rocket length from nose (normalized approximation)
 const CP_NORM = 0.65;
@@ -108,6 +119,15 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
   }
   const lengthM = params.length_m;
   const diamM = params.diameter_m;
+  const diagram = result.rocket_diagram;
+
+  // Map nose/tail to SVG x coords using matplotlib axes calibration.
+  // Data x-range in the PNG: [-0.3, total_in + 0.3] where total_in ≈ length_m * 39.3701
+  const totalInch = lengthM * 39.3701;
+  const dataSpan = totalInch + 0.6;
+  const SVG_X0 = AX_LEFT + (0.3 / dataSpan) * AX_W;            // nose
+  const SVG_X1 = AX_LEFT + ((totalInch + 0.3) / dataSpan) * AX_W; // tail
+  const SVG_W = SVG_X1 - SVG_X0;
 
   const CP_m = CP_NORM * lengthM;
   const CP_x = SVG_X0 + CP_NORM * SVG_W;
@@ -149,49 +169,68 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
         CG/CP Stability Animation
       </h3>
       <p className="text-xs text-gray-500">
-        CG migrates aft as propellant burns. CP is fixed at ~65% of rocket length from nose
-        (normalized approximation). Stability = (CP − CG) / diameter.
+        CG migrates aft as propellant burns. CP fixed at ~65% of rocket length (approximation).
+        Stability = (CP − CG) / diameter.
       </p>
 
-      {/* Rocket SVG */}
-      <div className="bg-gray-950 border border-gray-800 rounded-xl p-4">
-        <svg viewBox="0 0 600 100" className="w-full" style={{ height: 90 }}>
-          {/* Nosecone */}
-          <polygon
-            points={`${SVG_X0},50 ${SVG_X0 + 60},28 ${SVG_X0 + 60},72`}
-            fill="#1e2435" stroke="white" strokeWidth="1.5"
-          />
-          {/* Body tube */}
-          <rect
-            x={SVG_X0 + 60} y={28} width={SVG_W - 100} height={44}
-            fill="#1e2435" stroke="white" strokeWidth="1.5" rx="2"
-          />
-          {/* Fin */}
-          <polygon
-            points={`${SVG_X1 - 80},50 ${SVG_X1 - 40},20 ${SVG_X1 - 40},80`}
-            fill="#1e2435" stroke="white" strokeWidth="1.2"
-          />
-          {/* Nozzle */}
-          <rect
-            x={SVG_X1 - 40} y={35} width={40} height={30}
-            fill="#1e2435" stroke="white" strokeWidth="1.2" rx="2"
-          />
+      {/* Rocket diagram + animated overlay */}
+      <div className="bg-gray-950 border border-gray-800 rounded-xl overflow-hidden">
+        <svg
+          viewBox={`0 0 ${IMG_W} ${IMG_H}`}
+          className="w-full"
+          style={{ display: 'block' }}
+        >
+          {diagram ? (
+            /* OR diagram as background */
+            <image
+              href={`data:image/png;base64,${diagram}`}
+              x={0} y={0}
+              width={IMG_W} height={IMG_H}
+              preserveAspectRatio="xMidYMid meet"
+            />
+          ) : (
+            /* Fallback: hand-drawn rocket */
+            <>
+              <polygon
+                points={`${SVG_X0},${IMG_H / 2} ${SVG_X0 + 120},${IMG_H / 2 - 50} ${SVG_X0 + 120},${IMG_H / 2 + 50}`}
+                fill="#1e2435" stroke="white" strokeWidth="2.5"
+              />
+              <rect
+                x={SVG_X0 + 120} y={IMG_H / 2 - 50} width={SVG_W - 200} height={100}
+                fill="#1e2435" stroke="white" strokeWidth="2.5" rx="3"
+              />
+              <polygon
+                points={`${SVG_X1 - 160},${IMG_H / 2} ${SVG_X1 - 80},${IMG_H / 2 - 90} ${SVG_X1 - 80},${IMG_H / 2 + 90}`}
+                fill="#1e2435" stroke="white" strokeWidth="2"
+              />
+              <rect
+                x={SVG_X1 - 80} y={IMG_H / 2 - 60} width={80} height={120}
+                fill="#1e2435" stroke="white" strokeWidth="2" rx="3"
+              />
+            </>
+          )}
 
           {/* CP marker — fixed, green */}
-          <line x1={CP_x} y1={18} x2={CP_x} y2={78} stroke="#34d399" strokeWidth="2" strokeDasharray="4 3" />
-          <text x={CP_x} y={13} textAnchor="middle" fill="#34d399" fontSize="9" fontWeight="bold">CP</text>
+          <line x1={CP_x} y1={LINE_Y1} x2={CP_x} y2={LINE_Y2}
+            stroke="#34d399" strokeWidth="3" strokeDasharray="10 6" />
+          <text x={CP_x} y={LABEL_Y_TOP} textAnchor="middle"
+            fill="#34d399" fontSize="26" fontWeight="bold">CP</text>
 
           {/* CG marker — animated, amber */}
-          <line x1={cgX} y1={18} x2={cgX} y2={78} stroke="#f59e0b" strokeWidth="2" strokeDasharray="4 3" />
-          <text x={cgX} y={13} textAnchor="middle" fill="#f59e0b" fontSize="9" fontWeight="bold">CG</text>
+          <line x1={cgX} y1={LINE_Y1} x2={cgX} y2={LINE_Y2}
+            stroke="#f59e0b" strokeWidth="3" strokeDasharray="10 6" />
+          <text x={cgX} y={LABEL_Y_TOP} textAnchor="middle"
+            fill="#f59e0b" fontSize="26" fontWeight="bold">CG</text>
 
           {/* Stability bracket */}
-          <line x1={bracketLeft} y1={86} x2={bracketRight} y2={86} stroke="#64748b" strokeWidth="1" />
-          <text x={bracketMid} y={97} textAnchor="middle" fill="#64748b" fontSize="8">
+          <line x1={bracketLeft} y1={BRACKET_Y} x2={bracketRight} y2={BRACKET_Y}
+            stroke="#64748b" strokeWidth="2" />
+          <text x={bracketMid} y={BRACKET_LABEL_Y} textAnchor="middle"
+            fill="#64748b" fontSize="22">
             {currentStab.toFixed(2)} cal
           </text>
         </svg>
-        <div className="flex gap-5 text-[11px] mt-1.5">
+        <div className="flex gap-5 text-[11px] px-3 pb-2 pt-1">
           <span className="text-green-400">— CP (fixed)</span>
           <span className="text-amber-400">-- CG (moves aft as propellant burns)</span>
         </div>

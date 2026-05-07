@@ -55,6 +55,9 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
   const [playing, setPlaying] = useState(false);
   const rafRef = useRef<number | null>(null);
   const lastRealTime = useRef<number | null>(null);
+  // Accumulated simulation time — increments independently each real frame so the
+  // animation advances even when simulation timesteps are larger than one frame's dtSim.
+  const simTimeRef = useRef(0);
   const tsTimeRef = useRef(ts.time);
   useEffect(() => { tsTimeRef.current = ts.time; }, [ts.time]);
 
@@ -71,12 +74,12 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
       const dtReal = (realNow - lastRealTime.current) / 1000;
       lastRealTime.current = realNow;
 
-      const dtSim = dtReal * SIM_SPEED;
-      // reachedEnd is set inside the updater and read after — safe in non-concurrent React
-      let reachedEnd = false;
+      // Accumulate sim time — this advances regardless of state update batching
+      simTimeRef.current += dtReal * SIM_SPEED;
+      const targetSim = simTimeRef.current;
 
+      let reachedEnd = false;
       setTimeIdx(prev => {
-        const targetSim = tsTimeRef.current[prev] + dtSim;
         let next = prev;
         while (next < burnIdxEnd && tsTimeRef.current[next + 1] <= targetSim) next++;
         if (next >= burnIdxEnd) {
@@ -149,11 +152,18 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
 
   function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
     setPlaying(false);
-    setTimeIdx(parseInt(e.target.value, 10));
+    const idx = parseInt(e.target.value, 10);
+    setTimeIdx(idx);
+    simTimeRef.current = ts.time[idx] ?? 0;
   }
 
   function togglePlay() {
-    if (timeIdx >= burnIdxEnd) setTimeIdx(0);
+    if (timeIdx >= burnIdxEnd) {
+      setTimeIdx(0);
+      simTimeRef.current = ts.time[0] ?? 0;
+    } else {
+      simTimeRef.current = ts.time[timeIdx] ?? 0;
+    }
     setPlaying(p => !p);
   }
 
@@ -188,7 +198,7 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
               x={0} y={0}
               width={IMG_W} height={IMG_H}
               preserveAspectRatio="xMidYMid meet"
-              opacity={0.65}
+              opacity={0.35}
             />
           ) : (
             /* Fallback: hand-drawn rocket */

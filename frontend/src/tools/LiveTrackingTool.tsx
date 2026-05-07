@@ -340,3 +340,131 @@ export function LiveTrackingTool({ unitSystem }: Props) {
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  // ── Derived display values ─────────────────────────────────────────────────
+  const connected = status !== 'disconnected';
+  const cur = points[points.length - 1];
+  const maxAltVal = points.reduce((m, p) => (p.alt_m > m ? p.alt_m : m), -Infinity);
+  const altScale = imp ? 3.28084 : 1;
+  const altUnit = imp ? 'ft' : 'm';
+  const speedScale = imp ? 2.23694 : 1;
+  const speedUnit = imp ? 'mph' : 'm/s';
+  const statusColor = status === 'live' ? 'text-green-400' : status === 'connected' ? 'text-yellow-400' : 'text-gray-500';
+  const statusLabel = status === 'live' ? 'Live' : status === 'connected' ? 'Connected — no fix' : 'Disconnected';
+
+  const stats = [
+    { label: 'Alt', value: cur ? `${Math.round(cur.alt_m * altScale).toLocaleString()} ${altUnit}` : '—' },
+    { label: 'Max Alt', value: Number.isFinite(maxAltVal) ? `${Math.round(maxAltVal * altScale).toLocaleString()} ${altUnit}` : '—' },
+    { label: 'Speed', value: cur?.speed_ms != null ? `${(cur.speed_ms * speedScale).toFixed(1)} ${speedUnit}` : '—' },
+    { label: 'Heading', value: cur?.heading_deg != null ? `${Math.round(cur.heading_deg)}°` : '—' },
+    { label: 'Fixes', value: String(points.length) },
+    { label: 'Elapsed', value: cur ? `${cur.t.toFixed(0)} s` : '0 s' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">Live GPS Tracking</h3>
+
+      {!HAS_SERIAL && (
+        <p className="text-xs text-amber-400 bg-amber-950/30 border border-amber-800/40 rounded-lg px-3 py-2">
+          Live tracking requires Chrome or Edge — Web Serial API not available in this browser.
+        </p>
+      )}
+
+      {/* Connection bar */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={connected ? disconnect : connect}
+          disabled={!HAS_SERIAL}
+          className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors shrink-0 ${
+            connected
+              ? 'bg-red-800 hover:bg-red-700 text-white'
+              : 'bg-blue-800 hover:bg-blue-700 text-white disabled:opacity-40 disabled:cursor-not-allowed'
+          }`}
+        >
+          {connected ? 'Disconnect' : 'Connect'}
+        </button>
+        <select
+          value={baudRate}
+          onChange={e => setBaudRate(Number(e.target.value))}
+          disabled={connected}
+          className="text-xs bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-gray-300 focus:outline-none disabled:opacity-50"
+        >
+          {BAUD_RATES.map(b => <option key={b} value={b}>{b} baud</option>)}
+        </select>
+        <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
+        {status === 'live' && <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />}
+        {lastRssi !== null && (
+          <span className="text-xs text-gray-500 font-mono">RSSI: {lastRssi} dBm</span>
+        )}
+      </div>
+
+      {/* Config panel */}
+      <div className="bg-gray-950 border border-gray-800 rounded-xl overflow-hidden">
+        <button
+          onClick={() => setConfigOpen(v => !v)}
+          className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold text-gray-400 hover:text-gray-200 transition-colors"
+        >
+          <span>Launch Config</span>
+          <span>{configOpen ? '▲' : '▼'}</span>
+        </button>
+        {configOpen && (
+          <div className="px-4 pb-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              { label: 'Launch Lat', val: launchLat, set: setLaunchLat, ph: '39.0000' },
+              { label: 'Launch Lon', val: launchLon, set: setLaunchLon, ph: '-104.0000' },
+              { label: 'Waiver Radius (ft)', val: waiverFt, set: setWaiverFt, ph: '5000' },
+            ].map(({ label, val, set, ph }) => (
+              <div key={label}>
+                <label className="block text-[10px] text-gray-500 uppercase mb-1">{label}</label>
+                <input
+                  type="number" step="any" value={val} placeholder={ph}
+                  onChange={e => set(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Map */}
+      <div ref={mapDivRef} className="rounded-lg overflow-hidden" style={{ height: 480 }} />
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-gray-600">Low</span>
+        <div className="flex-1 h-2 rounded" style={{
+          background: 'linear-gradient(to right, rgb(59,130,246), rgb(34,211,238), rgb(74,222,128), rgb(250,204,21), rgb(239,68,68))'
+        }} />
+        <span className="text-xs text-gray-600">High alt</span>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+        {stats.map(({ label, value }) => (
+          <div key={label} className="bg-gray-950 border border-gray-800 rounded-lg p-2 text-center">
+            <p className="text-[10px] text-gray-500 uppercase mb-0.5">{label}</p>
+            <p className="text-xs font-mono font-semibold text-gray-200 truncate">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-3">
+        <button
+          onClick={clearTrack}
+          disabled={points.length === 0}
+          className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Clear Track
+        </button>
+        <button
+          onClick={exportCsv}
+          disabled={points.length === 0}
+          className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Export CSV
+        </button>
+      </div>
+    </div>
+  );
+}

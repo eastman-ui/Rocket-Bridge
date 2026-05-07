@@ -755,6 +755,24 @@ def run_rocketpy(
     else:
         static_margin_pct = 0.0
 
+    # CP and CG positions from nose at t=0 (meters)
+    cp_position_m: Optional[float] = None
+    cg_position_m: Optional[float] = None
+    try:
+        _cso = rkt_params.get("coordinate_system_orientation", "nose_to_tail")
+        _tail_to_nose = (_cso == "tail_to_nose")
+        _cp_raw = float(rocket.cp_position(0))
+        _cg_raw = float(rocket.center_of_mass(0))
+        # Convert to "distance from nose" in meters
+        if _tail_to_nose:
+            cp_position_m = rocket_length - _cp_raw
+            cg_position_m = rocket_length - _cg_raw
+        else:
+            cp_position_m = _cp_raw
+            cg_position_m = _cg_raw
+    except Exception:
+        pass
+
     # ------------------------------------------------------------------
     # 6. Timeseries (downsampled to ≤500 pts)
     # ------------------------------------------------------------------
@@ -930,6 +948,8 @@ def run_rocketpy(
         "out_of_rail_velocity": out_of_rail_velocity,
         "static_margin_cal": static_margin_cal,
         "static_margin_pct": static_margin_pct,
+        "cp_position_m": cp_position_m,
+        "cg_position_m": cg_position_m,
         "static_margin_mach03_cal": static_margin_mach03_cal,
         "static_margin_mach03_pct": static_margin_mach03_pct,
         "burn_out_time_s": burn_out_time_s,

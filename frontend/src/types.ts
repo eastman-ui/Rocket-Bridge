@@ -44,6 +44,8 @@ export interface RocketPyResults {
   static_margin_pct: number;
   static_margin_mach03_cal: number;
   static_margin_mach03_pct: number;
+  cp_position_m?: number;
+  cg_position_m?: number;
   burn_out_time_s: number;
   impact_velocity_ms: number;
   drift_distance_m: number;

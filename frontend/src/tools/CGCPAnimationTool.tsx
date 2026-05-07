@@ -22,8 +22,8 @@ const LABEL_Y_TOP = 0.13 * IMG_H;   // 52  — label above line
 const BRACKET_Y = 0.82 * IMG_H;     // 328 — bracket below body
 const BRACKET_LABEL_Y = 0.93 * IMG_H; // 372
 
-// CP placed at 65% of rocket length from nose (normalized approximation)
-const CP_NORM = 0.65;
+// Fallback CP fraction when backend doesn't provide exact position
+const CP_NORM_FALLBACK = 0.65;
 
 // Animation: 1 real second = 0.75 sim seconds (slower than real time — easier to follow)
 const SIM_SPEED = 0.75;
@@ -129,8 +129,9 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
   const SVG_X1 = AX_LEFT + ((totalInch + 0.3) / dataSpan) * AX_W; // tail
   const SVG_W = SVG_X1 - SVG_X0;
 
-  const CP_m = CP_NORM * lengthM;
-  const CP_x = SVG_X0 + CP_NORM * SVG_W;
+  // Use exact CP from backend when available, fall back to 65% estimate
+  const CP_m = rpy.cp_position_m ?? CP_NORM_FALLBACK * lengthM;
+  const CP_x = SVG_X0 + (CP_m / lengthM) * SVG_W;
 
   function getCGX(idx: number) {
     const stab = stabArray[Math.min(idx, stabArray.length - 1)];

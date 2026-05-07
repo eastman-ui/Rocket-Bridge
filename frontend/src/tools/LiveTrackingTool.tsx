@@ -93,7 +93,7 @@ function parseGpsLine(line: string, t0: number): GpsPoint | null {
 
 // ── Landing prediction ──────────────────────────────────────────────────────
 
-function predictLanding(points: GpsPoint[]): [number, number] | null {
+function predictLanding(points: GpsPoint[], launchAltM = 0): [number, number] | null {
   const n = points.length;
   if (n < 4) return null;
   const cur = points[n - 1];
@@ -103,7 +103,9 @@ function predictLanding(points: GpsPoint[]): [number, number] | null {
   const dt = cur.t - old.t;
   if (dt <= 0) return null;
   const descentRate = (cur.alt_m - old.alt_m) / dt; // negative m/s
-  const timeToGround = cur.alt_m / Math.abs(descentRate);
+  const altAGL = cur.alt_m - launchAltM;
+  if (altAGL <= 0) return null;
+  const timeToGround = altAGL / Math.abs(descentRate);
   const headingRad = cur.heading_deg * Math.PI / 180;
   const dx = cur.speed_ms * Math.sin(headingRad) * timeToGround;
   const dy = cur.speed_ms * Math.cos(headingRad) * timeToGround;
@@ -155,6 +157,8 @@ export function LiveTrackingTool({ unitSystem }: Props) {
   const t0Ref = useRef<number>(0);
   const connectingRef = useRef(false);
   const pointsRef = useRef<GpsPoint[]>([]);
+  const launchAltRef = useRef(0);
+  const launchSetRef = useRef(false);
 
   // ── Map init ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -246,7 +250,7 @@ export function LiveTrackingTool({ unitSystem }: Props) {
     map.panTo([point.lat, point.lon], { animate: true, duration: 0.5 });
 
     if (landingMarker.current) { map.removeLayer(landingMarker.current); landingMarker.current = null; }
-    const pred = predictLanding(allPoints);
+    const pred = predictLanding(allPoints, launchAltRef.current);
     if (pred) {
       landingMarker.current = L.marker(pred, {
         icon: L.divIcon({
@@ -283,7 +287,9 @@ export function LiveTrackingTool({ unitSystem }: Props) {
             if (!pt) continue;
             if (pt.rssi != null) setLastRssi(pt.rssi);
             setStatus('live');
-            if (pointsRef.current.length === 0) {
+            if (!launchSetRef.current) {
+              launchSetRef.current = true;
+              launchAltRef.current = pt.alt_m;
               setLaunchLat(String(pt.lat));
               setLaunchLon(String(pt.lon));
             }
@@ -305,7 +311,7 @@ export function LiveTrackingTool({ unitSystem }: Props) {
 
   async function disconnect() {
     try { await readerRef.current?.cancel(); } catch { /* ignore */ }
-    try { await portRef.current?.close(); } catch { /* ignore */ }
+    // port.close() is handled by the read loop after reader.releaseLock()
     setStatus('disconnected');
     portRef.current = null;
     readerRef.current = null;
@@ -320,6 +326,8 @@ export function LiveTrackingTool({ unitSystem }: Props) {
     }
     trackSegs.current = [];
     pointsRef.current = [];
+    launchSetRef.current = false;
+    launchAltRef.current = 0;
     setPoints([]);
     setLastRssi(null);
   }

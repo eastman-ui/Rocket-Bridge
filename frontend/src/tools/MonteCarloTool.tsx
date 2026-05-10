@@ -35,7 +35,7 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
   return R_EARTH * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export function MonteCarloTool({ result, config, unitSystem, selectedFile }: Props) {
+export function MonteCarloTool({ config, unitSystem, selectedFile }: Props) {
   const imp = unitSystem === 'imperial';
   const [nSims, setNSims] = useState(50);
   // windStd stored in m/s; displayed in mph when imperial

@@ -28,3 +28,6 @@ Thumbs.db
 # Java
 *.class
 *.jar
+
+# Git worktrees
+.worktrees/

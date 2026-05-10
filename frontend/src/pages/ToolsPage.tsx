@@ -9,6 +9,10 @@ import { AirspaceTool } from '../tools/AirspaceTool';
 import { ParameterSweepTool } from '../tools/ParameterSweepTool';
 import { MotorCompareTool } from '../tools/MotorCompareTool';
 import { MonteCarloTool } from '../tools/MonteCarloTool';
+import { EjectionChargeTool } from '../tools/EjectionChargeTool';
+import { AltimeterTool } from '../tools/AltimeterTool';
+import { CGCPAnimationTool } from '../tools/CGCPAnimationTool';
+import { LiveTrackingTool } from '../tools/LiveTrackingTool';
 
 interface ToolsPageProps {
   cachedResult: ComparisonResponse | null;
@@ -20,7 +24,7 @@ interface ToolsPageProps {
   weatherData?: WeatherData;
 }
 
-type ToolId = 'flutter' | 'flightcard' | 'airspace' | 'sweep' | 'motors' | 'montecarlo';
+type ToolId = 'flutter' | 'flightcard' | 'airspace' | 'sweep' | 'motors' | 'montecarlo' | 'altimeter' | 'ejection' | 'cgcp' | 'livetrack';
 
 interface ToolDef {
   id: ToolId;
@@ -95,6 +99,51 @@ const TOOLS: ToolDef[] = [
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'altimeter',
+    label: 'Altimeter Overlay',
+    description: 'Upload a flight CSV and overlay altimeter data on RocketPy simulation charts',
+    needsResult: true,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
+      </svg>
+    ),
+  },
+  {
+    id: 'ejection',
+    label: 'Ejection Charge',
+    description: 'Black powder ejection charge calculator for drogue and main chute bays',
+    needsResult: false,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'cgcp',
+    label: 'CG/CP Animation',
+    description: 'Animate center of gravity migration and stability margin through the burn',
+    needsResult: true,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'livetrack',
+    label: 'Live Tracking',
+    description: 'Real-time GPS flight track via USB LoRa ground station — Web Serial API',
+    needsResult: false,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
       </svg>
     ),
   },
@@ -191,6 +240,22 @@ export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiv
             <MonteCarloTool result={cachedResult} config={config} unitSystem={unitSystem} selectedFile={selectedFile} />
           </div>
         )}
+        {cachedResult && (
+          <div style={activeTool === 'altimeter' ? {} : { display: 'none' }}>
+            <AltimeterTool result={cachedResult} unitSystem={unitSystem} />
+          </div>
+        )}
+        <div style={activeTool === 'ejection' ? {} : { display: 'none' }}>
+          <EjectionChargeTool />
+        </div>
+        {cachedResult && (
+          <div style={activeTool === 'cgcp' ? {} : { display: 'none' }}>
+            <CGCPAnimationTool result={cachedResult} unitSystem={unitSystem} />
+          </div>
+        )}
+        <div style={activeTool === 'livetrack' ? {} : { display: 'none' }}>
+          <LiveTrackingTool unitSystem={unitSystem} />
+        </div>
       </div>
     </div>
   );

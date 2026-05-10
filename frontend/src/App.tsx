@@ -102,27 +102,7 @@ function loadCache(): CacheEntry | null {
   } catch { return null; }
 }
 
-function timeAgo(ts: number): string {
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
 
-function CachedBanner({ meta, stale, onClear }: { meta: CacheMeta; stale: boolean; onClear: () => void }) {
-  return (
-    <div className="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-gray-400">
-      <svg className="w-3.5 h-3.5 text-gray-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 1.1.9 2 2 2h12a2 2 0 002-2V9l-5-5H6a2 2 0 00-2 2z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v5h5" />
-      </svg>
-      <span className="truncate">Cached · <span className="text-gray-300">{meta.filename}</span> · {timeAgo(meta.timestamp)}</span>
-      {stale && <span className="text-amber-400 font-medium shrink-0">Results may be outdated</span>}
-      <button onClick={onClear} className="ml-auto shrink-0 text-gray-600 hover:text-gray-300 transition-colors">Clear</button>
-    </div>
-  );
-}
 
 type AppState = 'idle' | 'simulating' | 'results' | 'error';
 const M_FT = 3.28084;

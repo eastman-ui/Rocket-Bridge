@@ -91,7 +91,6 @@ export function FinFlutterTool({ result, unitSystem }: Props) {
 
   // Mach timeseries from rpy
   const machTs = rpy.timeseries.mach;
-  const timeTs = rpy.timeseries.time;
   const altTs = rpy.timeseries.altitude;
 
   // Plot traces

@@ -381,8 +381,8 @@ design = {
     "fin_count": 4,
     "fin_root_in": 7.0,
     "fin_tip_in":  2.5,
-    "fin_span_in": 5.5,
-    "fin_sweep_in": 3.0,
+    "fin_span_in": 3.5,   # 1.6× tube OD — validated in OR for 1.0–1.5 cal margin
+    "fin_sweep_in": 2.0,
     "fin_thickness_in": 0.125,
     "motor_designation": "M1378LR",
     "motor_manufacturer": "Loki",

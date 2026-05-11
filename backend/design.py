@@ -395,8 +395,27 @@ Avionics coupler (avionics_bay_length_in): the ebay tube that slides inside the
 airframe spanning the switch band. Typical 8–12". Half extends into the forward
 section, half into the aft section. Fwd and aft bulkheads seal the electronics bay.
 
-Fin sizing: size fins to achieve 1.0–1.5 cal static margin using Barrowman
-equations. For a min-diameter build, fins typically need 4–6" span.
+Fin sizing — use these Barrowman-calibrated rules (validated against real OR files):
+
+  Min-diameter (motor OD within 3mm of tube ID):
+    span      = 1.6 × tube_od_in  (e.g. 54mm / 2.13" tube → 3.4–3.6" span)
+    root      = 2.0 × span
+    tip       = 0.36 × root
+    sweep     = 0.29 × root
+    count     = 4
+    thickness = 0.125"
+
+  Standard diameter (centering rings needed):
+    span      = 1.0 × tube_od_in
+    root      = 2.0 × span
+    tip       = 0.36 × root
+    sweep     = 0.29 × root
+    count     = 3 or 4
+    thickness = 0.125"
+
+  Critical rule: longer rockets need LESS fin area, not more. A min-diameter
+  54mm M-motor rocket (L:D ≈ 37:1) achieves 1.2 cal with only 3.5" span.
+  Resist the urge to use 5–6" span on long airframes — it will be over-stable.
 
 User config: altitude target {altitude_target_ft} ft, recovery: {recovery},
 main deploy: {main_deploy_ft} ft, drogue: {drogue_deploy}.

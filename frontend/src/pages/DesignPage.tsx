@@ -17,6 +17,7 @@ interface DesignState {
   fin_root_in: number | null;
   fin_span_in: number | null;
   fin_thickness_in: number | null;
+  tube_material: string | null;
   fin_material: string | null;
   motor_designation: string | null;
   est_margin_cal: number | null;
@@ -54,7 +55,7 @@ interface DesignPageProps {
 const EMPTY_DESIGN: DesignState = {
   tube_od_in: null, fwd_bay_length_in: null, avionics_bay_length_in: null,
   wall_in: null, nose_shape: null, fin_count: null, fin_root_in: null,
-  fin_span_in: null, fin_thickness_in: null, fin_material: null,
+  fin_span_in: null, fin_thickness_in: null, tube_material: null, fin_material: null,
   motor_designation: null, est_margin_cal: null, flutter_safety_factor: null,
   dry_mass_lb: null, wet_mass_lb: null, total_length_in: null, est_altitude_ft: null,
 };
@@ -262,6 +263,7 @@ export function DesignPage({ setSelectedFile, setActivePage }: DesignPageProps) 
             <StateRow label="Fin root" value={design.fin_root_in} unit='"' />
             <StateRow label="Fin span" value={design.fin_span_in} unit='"' />
             <StateRow label="Fin thickness" value={design.fin_thickness_in} unit='"' />
+            <StateRow label="Tube material" value={design.tube_material} />
             <StateRow label="Fin material" value={design.fin_material} />
             <StateRow label="Dry weight" value={design.dry_mass_lb} unit=" lb" />
             <StateRow label="Wet weight" value={design.wet_mass_lb} unit=" lb" />

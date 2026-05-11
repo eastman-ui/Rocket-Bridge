@@ -25,7 +25,21 @@ import xml.etree.ElementTree as ET
 
 IN_TO_M = 0.0254
 FT_TO_M = 0.3048
-FG_DENSITY        = 1820.0    # Wildman G12 fiberglass, kg/m³
+FG_DENSITY        = 1820.0    # Wildman G12 fiberglass, kg/m³ (legacy — kept for reference)
+
+TUBE_DENSITY: dict[str, float] = {
+    "cardboard":   700.0,   # LOC/Estes phenolic-kraft cardboard
+    "phenolic":   1300.0,   # phenolic paper tube
+    "fiberglass": 1820.0,   # G10/G12 fiberglass
+    "carbon":     1550.0,   # carbon fiber (CF/epoxy layup)
+}
+
+FIN_DENSITY: dict[str, float] = {
+    "aluminum":   2700.0,
+    "fiberglass": 1820.0,
+    "carbon":     1550.0,
+    "plywood":     600.0,
+}
 SWITCH_BAND_LEN_M = 0.0762    # 3" switch band outer tube
 NOZZLE_OVERHANG_M = 0.0254    # 1" motor nozzle overhang
 DROGUE_SPACE_M    = 0.15      # 6" min space between coupler extension and motor
@@ -765,6 +779,7 @@ def _build_design_state(d: dict, config: dict | None = None) -> dict:
         "fin_root_in":            tuned.get("fin_root_in"),
         "fin_span_in":            tuned.get("fin_span_in"),
         "fin_thickness_in":       tuned.get("fin_thickness_in"),
+        "tube_material":          d.get("tube_material"),
         "fin_material":           d.get("fin_material"),
         "motor_designation":      d.get("motor_designation"),
         "est_margin_cal":         margin,
@@ -875,6 +890,7 @@ Schema (all nullable except altitude_target_ft):
   "tube_od_in": <float|null>,
   "tube_manufacturer": <"LOC"|"Madcow"|"Wildman"|"Apogee"|null>,
   "min_diameter": <bool>,
+  "tube_material": <"cardboard"|"phenolic"|"fiberglass"|"carbon"|null>,
   "fin_material": <"aluminum"|"fiberglass"|"carbon"|"plywood"|null>,
   "fin_count": <int|null>,
   "fin_thickness_in": <float|null>,
@@ -898,7 +914,8 @@ Schema (all nullable except altitude_target_ft):
 Rules:
 - "3 inch" → tube_od_in=3.0 (user means nominal 3")
 - "min diameter" / "min-dia" → min_diameter=true
-- "aluminum fin can" → fin_material="aluminum"
+- "aluminum fin can" → fin_material="aluminum"; "carbon fiber" (no fin qualifier) → tube_material="carbon"
+- "cardboard tube", "cardboard airframe" → tube_material="cardboard"; "phenolic" → tube_material="phenolic"
 - If motor preference given (e.g. "use the J270", "Aerotech K"), set motor_preference
 - altitude_target_ft falls back to the config value if not stated in message
 - "make nose 2 inches longer" → nose_length_delta_in=2.0
@@ -944,16 +961,30 @@ def _regex_parse_constraints(text: str, config: dict) -> dict:
     # Min diameter
     min_dia = bool(re.search(r'min(?:imum)?\s*(?:-\s*)?diam(?:eter)?|min\s*dia', t))
 
-    # Fin material
+    # Fin material — require fin/can qualifier to avoid catching tube material
     fin_material = None
-    if re.search(r'alum(?:inum|inium)', t):
+    if re.search(r'alum(?:inum|inium)\s*fin\s*(?:can)?|alum(?:inum|inium)\s*fins?|al\s*fins?', t):
         fin_material = "aluminum"
-    elif re.search(r'carbon\s*(?:fiber|fibre|cf)', t):
+    elif re.search(r'carbon\s*(?:fiber|fibre|cf)?\s*fins?|cf\s*fins?', t):
         fin_material = "carbon"
-    elif re.search(r'fiberglass|fg|g10|g12', t):
+    elif re.search(r'(?:fiberglass|fg|g10|g12)\s*fins?', t):
         fin_material = "fiberglass"
-    elif re.search(r'ply(?:wood)?', t):
+    elif re.search(r'ply(?:wood)?\s*fins?', t):
         fin_material = "plywood"
+
+    # Tube / airframe material — separate from fin material.
+    # Explicit airframe qualifiers always win; bare "carbon fiber" only wins if fins aren't carbon.
+    tube_material = None
+    _has_carbon = bool(re.search(r'carbon\s*(?:fiber|fibre|cf)?', t))
+    _carbon_airframe = bool(re.search(r'carbon\s*(?:fiber|fibre|cf)?\s*(?:airframe|tube|body|rocket)', t))
+    if _carbon_airframe or (_has_carbon and fin_material != "carbon"):
+        tube_material = "carbon"
+    elif re.search(r'cardboard', t):
+        tube_material = "cardboard"
+    elif re.search(r'phenolic', t):
+        tube_material = "phenolic"
+    elif re.search(r'fiberglass|fg|g10|g12', t) and fin_material != "fiberglass":
+        tube_material = "fiberglass"
 
     # Fin count
     fin_count = None
@@ -1111,6 +1142,7 @@ def _regex_parse_constraints(text: str, config: dict) -> dict:
         "tube_od_in":             tube_od,
         "tube_manufacturer":      None,
         "min_diameter":           min_dia,
+        "tube_material":          tube_material,
         "fin_material":           fin_material,
         "fin_count":              fin_count,
         "fin_thickness_in":       fin_thickness,
@@ -1312,11 +1344,15 @@ def _estimate_rocket_dry_mass_kg(design: dict) -> float:
 
     L_nose, fwd_len, sw_len, aft_len = _section_lengths(design)
 
-    tube_mass  = FG_DENSITY * tube_area * (L_nose * 0.5 + fwd_len + sw_len + aft_len)
+    tube_rho  = TUBE_DENSITY.get(design.get("tube_material") or "fiberglass", 1820.0)
+    tube_mass = tube_rho * tube_area * (L_nose * 0.5 + fwd_len + sw_len + aft_len)
+
     av_mass    = design.get("avionics_mass_kg", 0.3)
+
+    fin_rho     = FIN_DENSITY.get(design.get("fin_material") or "fiberglass", 1820.0)
     fin_thick_m = design["fin_thickness_in"] * IN_TO_M
-    fin_mass   = (
-        FG_DENSITY * fin_thick_m
+    fin_mass    = (
+        fin_rho * fin_thick_m
         * (design["fin_root_in"] + design["fin_tip_in"]) / 2 * IN_TO_M
         * design["fin_span_in"] * IN_TO_M
         * design["fin_count"]
@@ -1375,6 +1411,7 @@ def _build_design_for_motor(motor: dict, constraints: dict, config: dict) -> dic
     """Assemble a complete design dict for a given motor + constraints."""
     tube_od_in    = constraints.get("_tube_od_in") or constraints.get("tube_od_in") or 3.0
     wall_in       = constraints.get("_wall_in") or constraints.get("wall_in") or 0.082
+    tube_material = constraints.get("tube_material") or "fiberglass"
     fin_material  = constraints.get("fin_material") or "fiberglass"
     fin_count     = constraints.get("fin_count") or 4
     altitude_ft   = constraints.get("altitude_target_ft", 15000)
@@ -1391,6 +1428,7 @@ def _build_design_for_motor(motor: dict, constraints: dict, config: dict) -> dic
     d = {
         "tube_od_in":             tube_od_in,
         "wall_in":                wall_in,
+        "tube_material":          tube_material,
         "tube_manufacturer":      constraints.get("_tube_manufacturer", "LOC"),
         "nose_shape":             constraints.get("nose_shape") or "ogive",
         "nose_length_in":         constraints.get("nose_length_in") or round(tube_od_in * 3.5, 1),

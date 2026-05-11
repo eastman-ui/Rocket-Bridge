@@ -625,6 +625,7 @@ class _DesignState(BaseModel):
     fin_root_in: Optional[float] = None
     fin_span_in: Optional[float] = None
     fin_thickness_in: Optional[float] = None
+    tube_material: Optional[str] = None
     fin_material: Optional[str] = None
     motor_designation: Optional[str] = None
     est_margin_cal: Optional[float] = None

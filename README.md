@@ -2,6 +2,8 @@
 
 RocketBridge bridges OpenRocket and RocketPy. Upload a `.ork` file, configure your launch site, and RocketBridge runs both simulators in parallel — returning a side-by-side comparison of key flight metrics, interactive time-series charts, a 3D trajectory, satellite map overlay, rocket orientation animation, and a downloadable KML file for Google Earth.
 
+RocketBridge also includes an AI-powered **Design Builder** that turns plain-English rocket descriptions into ready-to-simulate `.ork` files — no CAD required.
+
 ## Quick Start (Docker — recommended)
 
 Docker handles all dependencies automatically, including Java 17 and the OpenRocket JAR.
@@ -11,6 +13,17 @@ Docker handles all dependencies automatically, including Java 17 and the OpenRoc
 ```bash
 git clone https://github.com/eastman-ui/Rocket-Bridge.git
 cd Rocket-Bridge
+```
+
+**Optional — AI Design Builder:** Add a Gemini API key to enable the Design Builder page. Create `.env` in the project root:
+
+```
+GEMINI_API_KEY=your_key_here
+```
+
+Get a free key at [Google AI Studio](https://aistudio.google.com/app/apikey). Without this, the Design Builder tab will be unavailable.
+
+```bash
 docker compose up --build
 ```
 
@@ -99,6 +112,55 @@ Click **Rocket Details** in the header to see motor designation, dimensions, mas
 
 ---
 
+## Design Builder
+
+Click the **Design** tab to open the AI-powered rocket designer.
+
+Describe your rocket in plain English — the builder extracts your intent and generates a flight-ready `.ork` file.
+
+**Example prompts:**
+
+> "3-inch fiberglass airframe, aluminum fin can, 0.125" fins, target 5000 ft AGL"
+
+> "6-inch tube, carbon fins, dual deploy, 10000 ft, 12 ft launch rail"
+
+### What it understands
+
+| Field | Example phrases |
+|---|---|
+| Target altitude | "5000 ft", "10k feet" |
+| Body tube diameter | "3 inch", "4\"", "6-inch tube" |
+| Fin material | "fiberglass", "aluminum fin can", "carbon" |
+| Fin thickness | "0.125\" fins", "1/8 inch", ".25 thick" |
+| Nose cone shape | "ogive", "Von Karman", "conical nose" |
+| Drogue chute size | "24\" drogue" |
+| Main chute size | "96 inch main" |
+| Avionics bay mass | "300g avionics" |
+| Launch rail length | "12 ft rail" |
+| Recovery type | "dual deploy", "single deploy" |
+
+### How it works
+
+1. Type your description and click **Send**
+2. RocketBridge picks a target impulse class from your altitude goal, selects the best-fitting motor diameter for your tube, and ranks candidate motors by how close they land to your target altitude
+3. Ranked motors appear as cards — each shows projected apogee, stability margin, and motor designation
+4. Click **Select** on any card to preview, or **Download .ork** to get the file
+5. The downloaded `.ork` contains **all ranked motors as named flight configurations** — open it in OpenRocket and switch between them in the flight configuration dropdown
+
+### Conversational refinement
+
+Follow-up messages update the design without starting over:
+
+> "Make it a 4-inch tube" → re-searches motors sized for 4" ID, preserves altitude target and all other settings
+
+> "Shorten the avionics bay by 2 inches" → adjusts geometry, regenerates .ork
+
+The current resolved design state (tube OD, motor OD, fin material, estimated mass, total length) is always visible in the sidebar.
+
+**Requires:** `GEMINI_API_KEY` set in `.env`
+
+---
+
 ## Tools Page
 
 Click the **Tools** tab in the header to access six specialized tools:
@@ -145,6 +207,7 @@ Dispersion analysis with N randomized simulations (10–500). Vary wind speed (�
 
 ## Features
 
+- **AI Design Builder** — describe a rocket in plain English, get a ranked motor list and a ready-to-simulate `.ork` with all candidates embedded as named flight configurations
 - Side-by-side OpenRocket vs. RocketPy comparison with percent-delta highlighting
 - Interactive time-series charts: altitude, velocity, Mach, stability margin, thrust
 - Animated 3D trajectory plot (East/North/Altitude, metric or imperial)
@@ -162,6 +225,16 @@ Dispersion analysis with N randomized simulations (10–500). Vary wind speed (�
 ---
 
 ## Common Issues & Troubleshooting
+
+### Design Builder tab is missing / "AI features unavailable"
+
+The Design Builder requires a Gemini API key. Add it to `.env` in the project root:
+
+```
+GEMINI_API_KEY=your_key_here
+```
+
+Then restart Docker: `docker compose down && docker compose up`. Get a free key at [Google AI Studio](https://aistudio.google.com/app/apikey).
 
 ### "Simulation failed — Java not available"
 

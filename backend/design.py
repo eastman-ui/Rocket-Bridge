@@ -864,6 +864,12 @@ Schema (all nullable except altitude_target_ft):
   "fin_material": <"aluminum"|"fiberglass"|"carbon"|"plywood"|null>,
   "fin_count": <int|null>,
   "fin_thickness_in": <float|null>,
+  "nose_shape": <"ogive"|"conical"|"elliptical"|"vonkarman"|"parabolic"|null>,
+  "main_chute_in": <float|null>,
+  "drogue_chute_in": <float|null>,
+  "avionics_mass_kg": <float|null>,
+  "rail_length_ft": <float|null>,
+  "recovery": <"dual"|"single"|null>,
   "altitude_target_ft": <float>,
   "motor_preference": <string|null>,
   "nose_length_in": <float|null>,
@@ -887,6 +893,12 @@ Rules:
 - Use *_delta_in for relative changes, *_in for absolute values
 - "1/4 inch fins", "0.25\" thick", "quarter inch thick fins" → fin_thickness_in=0.25
 - "3/16 fins", "3/16 inch thick" → fin_thickness_in=0.1875
+- "conical nose", "cone nose" → nose_shape="conical"; "von karman" → "vonkarman"
+- "36 inch main", "36\" main chute" → main_chute_in=36.0
+- "18 inch drogue" → drogue_chute_in=18.0
+- "500g avionics", "1 lb electronics" → avionics_mass_kg (convert lb→kg)
+- "10 foot rail", "12 ft launch rail" → rail_length_ft
+- "single deploy", "single deployment" → recovery="single"; "dual deploy" → recovery="dual"
 """
 
 
@@ -963,9 +975,10 @@ def _regex_parse_constraints(text: str, config: dict) -> dict:
     if fin_thickness is not None:
         fin_thickness = max(0.0625, min(0.5, round(fin_thickness, 4)))
 
-    # Altitude from message (e.g. "15k ft", "10,000 feet", "15000")
+    # Altitude from message (e.g. "15k ft", "10,000 feet", "15000").
+    # Negative lookahead excludes "rail" and "launch rail" so "12 foot rail" is not parsed.
     alt_ft = config.get("altitude_target_ft", 15000)
-    m = re.search(r'(\d+(?:[.,]\d+)?)\s*k?\s*(?:ft|feet|foot)', t)
+    m = re.search(r'(\d+(?:[.,]\d+)?)\s*k?\s*(?:ft|feet|foot)(?!\s*(?:launch\s*)?rail)', t)
     if m:
         raw_val = m.group(1).replace(",", "")
         parsed = float(raw_val)
@@ -1030,6 +1043,56 @@ def _regex_parse_constraints(text: str, config: dict) -> dict:
         if re.search(rf'shorter\s+(?:{sec_pat})|(?:{sec_pat})\s+shorter', t):
             geo[delta_key] = -2.0
 
+    # Nose shape
+    nose_shape = None
+    if re.search(r'von\s*karman|haack', t):
+        nose_shape = "vonkarman"
+    elif re.search(r'paraboli', t):
+        nose_shape = "parabolic"
+    elif re.search(r'ellipt', t):
+        nose_shape = "elliptical"
+    elif re.search(r'con(?:e|ical)\s*nose|nose\s*con(?:e|ical)', t):
+        nose_shape = "conical"
+    elif re.search(r'ogive|tangent\s*ogive', t):
+        nose_shape = "ogive"
+
+    # Parachute sizes (main and drogue)
+    main_chute = None
+    _m = re.search(r'(\d+(?:\.\d+)?)\s*(?:"|inch(?:es)?|in\b)\s*main|main\s*(?:chute|parachute)?\s*(\d+(?:\.\d+)?)\s*(?:"|inch(?:es)?|in\b)?', t)
+    if _m:
+        main_chute = float(_m.group(1) or _m.group(2))
+    drogue_chute = None
+    _m = re.search(r'(\d+(?:\.\d+)?)\s*(?:"|inch(?:es)?|in\b)\s*drogue|drogue\s*(?:chute|parachute)?\s*(\d+(?:\.\d+)?)\s*(?:"|inch(?:es)?|in\b)?', t)
+    if _m:
+        drogue_chute = float(_m.group(1) or _m.group(2))
+
+    # Avionics mass: "500g avionics", "1 lb electronics", "300 gram altimeter"
+    avionics_mass_kg = None
+    _m = re.search(r'(\d+(?:\.\d+)?)\s*(?:kg|kilogram)', t)
+    if _m and re.search(r'avionics|electronic|altimeter|computer|payload', t):
+        avionics_mass_kg = float(_m.group(1))
+    if avionics_mass_kg is None:
+        _m = re.search(r'(\d+(?:\.\d+)?)\s*g(?:ram(?:s)?)?\b.*?(?:avionics|electronic|altimeter|payload)|(?:avionics|electronic|altimeter|payload).*?(\d+(?:\.\d+)?)\s*g(?:ram(?:s)?)?\b', t)
+        if _m:
+            avionics_mass_kg = float(_m.group(1) or _m.group(2)) / 1000
+    if avionics_mass_kg is None:
+        _m = re.search(r'(\d+(?:\.\d+)?)\s*lb.*?(?:avionics|electronic|altimeter|payload)|(?:avionics|electronic|altimeter|payload).*?(\d+(?:\.\d+)?)\s*lb', t)
+        if _m:
+            avionics_mass_kg = float(_m.group(1) or _m.group(2)) * 0.453592
+
+    # Rail length: "10 foot rail", "12 ft launch rail", "8' rail"
+    rail_length_ft = None
+    _m = re.search(r"(\d+(?:\.\d+)?)\s*(?:foot|feet|ft|')\s*(?:launch\s*)?rail|rail\s*(?:length\s*)?(\d+(?:\.\d+)?)\s*(?:foot|feet|ft|')?", t)
+    if _m:
+        rail_length_ft = float(_m.group(1) or _m.group(2))
+
+    # Recovery type
+    recovery = None
+    if re.search(r'single\s*(?:deploy(?:ment)?|event)', t):
+        recovery = "single"
+    elif re.search(r'dual\s*(?:deploy(?:ment)?|event)|redundant\s*deploy', t):
+        recovery = "dual"
+
     return {
         "tube_od_in":             tube_od,
         "tube_manufacturer":      None,
@@ -1037,6 +1100,12 @@ def _regex_parse_constraints(text: str, config: dict) -> dict:
         "fin_material":           fin_material,
         "fin_count":              fin_count,
         "fin_thickness_in":       fin_thickness,
+        "nose_shape":             nose_shape,
+        "main_chute_in":          main_chute,
+        "drogue_chute_in":        drogue_chute,
+        "avionics_mass_kg":       avionics_mass_kg,
+        "rail_length_ft":         rail_length_ft,
+        "recovery":               recovery,
         "altitude_target_ft":     alt_ft,
         "motor_preference":       motor_pref,
         "nose_length_in":         geo.get("nose_length_in"),
@@ -1083,10 +1152,15 @@ async def _parse_constraints(messages: list[dict], config: dict) -> dict:
             if r.status_code == 200:
                 raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 raw = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-                constraints = json.loads(raw)
-                if not constraints.get("altitude_target_ft"):
-                    constraints["altitude_target_ft"] = config.get("altitude_target_ft", 15000)
-                return constraints
+                gemini = json.loads(raw)
+                if not gemini.get("altitude_target_ft"):
+                    gemini["altitude_target_ft"] = config.get("altitude_target_ft", 15000)
+                # Fill any null fields with regex results so new schema fields are never lost
+                regex = _regex_parse_constraints(combined, config)
+                for k, v in regex.items():
+                    if gemini.get(k) is None and v is not None:
+                        gemini[k] = v
+                return gemini
         except Exception:
             pass  # fall through to regex
 
@@ -1290,11 +1364,11 @@ def _build_design_for_motor(motor: dict, constraints: dict, config: dict) -> dic
         "tube_od_in":             tube_od_in,
         "wall_in":                wall_in,
         "tube_manufacturer":      constraints.get("_tube_manufacturer", "LOC"),
-        "nose_shape":             "ogive",
+        "nose_shape":             constraints.get("nose_shape") or "ogive",
         "nose_length_in":         constraints.get("nose_length_in") or round(tube_od_in * 3.5, 1),
         "fwd_bay_length_in":      constraints.get("fwd_bay_length_in") or round(tube_od_in * 5.5, 1),
         "avionics_bay_length_in": constraints.get("avionics_bay_length_in") or 9.0,
-        "avionics_mass_kg":       0.30,
+        "avionics_mass_kg":       constraints.get("avionics_mass_kg") or 0.30,
         "fin_material":           fin_material,
         "fin_count":              fin_count,
         "fin_root_in":            root_in,
@@ -1307,8 +1381,8 @@ def _build_design_for_motor(motor: dict, constraints: dict, config: dict) -> dic
         "motor_od_in":            motor["motor_od_in"],
         "motor_length_in":        motor["motor_len_in"],
         "motor_total_mass_kg":    motor.get("prop_mass_kg", 0) * 1.6,
-        "drogue_dia_in":          round(tube_od_in * 4),
-        "main_dia_in":            round(tube_od_in * 12),
+        "drogue_dia_in":          constraints.get("drogue_chute_in") or round(tube_od_in * 4),
+        "main_dia_in":            constraints.get("main_chute_in") or round(tube_od_in * 12),
     }
 
     # Tune fin span for stability
@@ -1544,15 +1618,22 @@ async def analyze(messages: list[dict], config: dict, base_constraints: dict | N
                 options = [o for o in options if motor_pref in o["manufacturer"].lower()] or options
         options.sort(key=lambda o: abs(o["predicted_altitude_ft"] - altitude_ft))
 
+    # Build effective config — constraint-provided recovery/rail_length override UI config
+    eff_config = dict(config)
+    if constraints.get("recovery"):
+        eff_config["recovery"] = constraints["recovery"]
+    if constraints.get("rail_length_ft"):
+        eff_config["rail_length_ft"] = constraints["rail_length_ft"]
+
     # 6. Generate .ork for best match
     best = options[0] if options else None
     ork_b64 = None
     design_state = None
     if best:
         try:
-            ork_bytes = generate_ork(best["_design"], config)
+            ork_bytes = generate_ork(best["_design"], eff_config)
             ork_b64 = base64.b64encode(ork_bytes).decode()
-            design_state = _build_design_state(best["_design"], config)
+            design_state = _build_design_state(best["_design"], eff_config)
         except Exception:
             pass
 

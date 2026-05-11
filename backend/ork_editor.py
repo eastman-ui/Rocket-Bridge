@@ -215,3 +215,170 @@ def parse_ork_to_tree(ork_bytes: bytes) -> dict:
             })
 
     return result
+
+
+# ─── Writer: apply edited component tree back to original .ork XML ───────────
+
+# Properties that are editable per component type (for writing back)
+EDITABLE_PER_TYPE: Dict[str, List[str]] = {
+    "nosecone": ["shape", "length", "thickness", "aftradius",
+                 "aftshoulderradius", "aftshoulderlength", "aftshoulderthickness",
+                 "aftshouldercapped", "isflipped", "shapeclipped", "shapeparameter"],
+    "bodytube": ["length", "thickness", "radius"],
+    "tubecoupler": ["length", "outerradius"],
+    "innertube": ["length", "outerradius", "thickness"],
+    "trapezoidfinset": ["rootchord", "tipchord", "sweep", "span",
+                        "thickness", "cant", "crosssection", "filletradius", "fincount"],
+    "freeformfinset": ["thickness", "cant", "fincount"],
+    "parachute": ["diameter", "cd", "deployaltitude", "deploydelay", "linecount", "linelength"],
+    "shockcord": ["cordlength"],
+    "masscomponent": ["mass", "packedlength", "packedradius"],
+    "bulkhead": ["length", "outerradius"],
+    "centeringring": ["length", "outerradius", "innerradius"],
+    "engineblock": ["length", "outerradius", "innerradius"],
+    "railbutton": ["outerdiameter", "innerdiameter", "height"],
+}
+
+COMMON_EDITABLE = ["overridemass", "name"]
+
+
+def _set_text(elem: ET.Element, tag: str, value: Any) -> None:
+    """Set child element text, creating the element if needed."""
+    child = elem.find(tag)
+    if child is None:
+        child = ET.SubElement(elem, tag)
+    child.text = str(value)
+
+
+def _collect_edits(components: list, edits: Dict[str, dict]) -> None:
+    """Flatten the component tree into an id -> edit_dict lookup."""
+    for comp in components:
+        comp_id = comp.get("id", "")
+        if comp_id:
+            edits[comp_id] = comp
+        for child in comp.get("children", []):
+            if child.get("type") != "motormount":
+                _collect_edits([child], edits)
+
+
+def _apply_component_edits(elem: ET.Element, edit: dict) -> None:
+    """Apply edited fields from the JSON tree to an XML element."""
+    comp_type = elem.tag.lower()
+
+    # Update name
+    if "name" in edit:
+        name_el = elem.find("name")
+        if name_el is not None:
+            name_el.text = edit["name"]
+
+    # Update comment
+    if "comment" in edit:
+        comment_el = elem.find("comment")
+        if comment_el is not None:
+            comment_el.text = edit["comment"] or ""
+
+    # Update common editable fields (skip "name" — handled above)
+    for prop in COMMON_EDITABLE:
+        if prop in edit and prop != "name":
+            _set_text(elem, prop, edit[prop])
+
+    # Update type-specific fields
+    for prop in EDITABLE_PER_TYPE.get(comp_type, []):
+        if prop in edit:
+            _set_text(elem, prop, edit[prop])
+
+    # Update position
+    if "position" in edit:
+        pos = edit["position"]
+        ao = elem.find("axialoffset")
+        if ao is not None:
+            ao.set("method", pos.get("method", "top"))
+            ao.text = str(pos.get("offset", 0.0))
+        pos_el = elem.find("position")
+        if pos_el is not None:
+            pos_el.set("type", pos.get("position_type", "top"))
+            pos_el.text = str(pos.get("position_value", 0.0))
+
+    # Update material
+    if "material" in edit and edit["material"]:
+        mat_el = elem.find("material")
+        if mat_el is not None:
+            mat = edit["material"]
+            mat_el.text = mat.get("name", "")
+            mat_el.set("type", mat.get("type", "bulk"))
+            mat_el.set("density", str(mat.get("density", 0)))
+
+    # Special: freeform fin points
+    if comp_type == "freeformfinset" and "finpoints" in edit:
+        fp_el = elem.find("finpoints")
+        if fp_el is not None:
+            # Remove existing points
+            for pt in fp_el.findall("point"):
+                fp_el.remove(pt)
+            # Add new points
+            for pt in edit["finpoints"]:
+                pt_el = ET.SubElement(fp_el, "point")
+                pt_el.set("x", str(pt.get("x", 0)))
+                pt_el.set("y", str(pt.get("y", 0)))
+
+    # Update color
+    if "color" in edit:
+        color_el = elem.find("color")
+        if color_el is not None:
+            for k in ("red", "green", "blue", "alpha"):
+                if k in edit["color"]:
+                    color_el.set(k, str(edit["color"][k]))
+
+
+def _apply_edits_to_xml(parent: ET.Element, edits: Dict[str, dict]) -> None:
+    """Recursively apply edits to XML elements matched by <id>."""
+    for elem in parent:
+        tag = elem.tag.lower()
+
+        if tag == "subcomponents":
+            _apply_edits_to_xml(elem, edits)
+            continue
+
+        # Check if this element has an <id> matching an edit
+        id_el = elem.find("id")
+        if id_el is not None and id_el.text:
+            comp_id = id_el.text.strip()
+            if comp_id in edits:
+                _apply_component_edits(elem, edits[comp_id])
+
+        # Recurse into children
+        _apply_edits_to_xml(elem, edits)
+
+
+def write_tree_to_ork(tree: dict, original_ork_bytes: bytes) -> bytes:
+    """Apply edited component properties back to the original .ork XML.
+
+    Strategy: parse original XML, walk the component tree, update fields
+    that changed, then re-serialize. This preserves simulation data,
+    motor configs, and other non-editable sections.
+    """
+    xml_str = _extract_ork_xml(original_ork_bytes)
+    root = ET.fromstring(xml_str)
+
+    # Build a lookup: component id -> edited component dict
+    edits: Dict[str, dict] = {}
+    _collect_edits(tree.get("components", []), edits)
+
+    # Walk the original XML tree and apply edits
+    rocket = root.find("rocket")
+    if rocket is not None:
+        _apply_edits_to_xml(rocket, edits)
+
+    # Serialize back to XML
+    ET.indent(root, space="  ")
+    xml_out = ET.tostring(root, encoding="unicode", xml_declaration=True)
+
+    # Re-zip if original was ZIP
+    magic = original_ork_bytes[:4]
+    if magic[:2] == b"PK":
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("rocket.ork", xml_out)
+        return buf.getvalue()
+    else:
+        return xml_out.encode("utf-8")

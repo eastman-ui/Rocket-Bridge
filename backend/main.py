@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import math
@@ -9,7 +10,7 @@ import logging
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -17,7 +18,7 @@ from fastapi.responses import StreamingResponse
 import design as design_module
 
 from converter import convert_ork, get_stored_results, validate_ork
-from ork_editor import parse_ork_to_tree
+from ork_editor import parse_ork_to_tree, write_tree_to_ork
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
 from sweep import run_sweep
@@ -752,3 +753,18 @@ async def parse_ork_endpoint(file: UploadFile):
         return tree
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Failed to parse .ork: {e}")
+
+
+@app.post("/api/design/write-ork")
+async def write_ork_endpoint(request: Request):
+    body = await request.json()
+    tree = body.get("tree")
+    ork_b64 = body.get("ork_b64")  # base64 of original .ork
+    if not tree or not ork_b64:
+        raise HTTPException(status_code=400, detail="tree and ork_b64 required")
+    original_bytes = base64.b64decode(ork_b64)
+    try:
+        new_ork_bytes = await asyncio.to_thread(write_tree_to_ork, tree, original_bytes)
+        return {"ork_b64": base64.b64encode(new_ork_bytes).decode("ascii")}
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to write .ork: {e}")

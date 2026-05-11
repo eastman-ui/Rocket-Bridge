@@ -1359,8 +1359,8 @@ def _flutter_sf_g(d: dict, altitude_ft: float, G_pa: float) -> float:
 
 def _build_design_for_motor(motor: dict, constraints: dict, config: dict) -> dict:
     """Assemble a complete design dict for a given motor + constraints."""
-    tube_od_in    = constraints["_tube_od_in"]
-    wall_in       = constraints["_wall_in"]
+    tube_od_in    = constraints.get("_tube_od_in") or constraints.get("tube_od_in") or 3.0
+    wall_in       = constraints.get("_wall_in") or constraints.get("wall_in") or 0.082
     fin_material  = constraints.get("fin_material") or "fiberglass"
     fin_count     = constraints.get("fin_count") or 4
     altitude_ft   = constraints.get("altitude_target_ft", 15000)
@@ -1662,7 +1662,13 @@ async def analyze(messages: list[dict], config: dict, base_constraints: dict | N
         "motor_options": clean_options,
         "design_state": design_state,
         "ork_b64": ork_b64,
-        "resolved_constraints": {k: v for k, v in constraints.items() if not k.startswith("_")},
+        "resolved_constraints": {
+            **{k: v for k, v in constraints.items() if not k.startswith("_")},
+            # Include resolved tube values (may differ from user-input after min-dia snapping)
+            "tube_od_in": tube_od_in,
+            "wall_in": wall_in,
+            "motor_od_in": motor_od_in,
+        },
     }
 
 

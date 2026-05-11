@@ -1232,18 +1232,32 @@ async def _search_motors_for_design(constraints: dict) -> list[dict]:
     motor_od_in = constraints.get("_motor_od_in", 2.953)  # resolved before calling
     motor_dia_mm = round(motor_od_in * 25.4)
 
+    # Base impulse class from altitude target
     if altitude_ft < 5000:
-        classes = ["G", "H"]
+        base_classes = ["G", "H"]
     elif altitude_ft < 10000:
-        classes = ["H", "I"]
+        base_classes = ["H", "I"]
     elif altitude_ft < 15000:
-        classes = ["I", "J"]
+        base_classes = ["I", "J"]
     elif altitude_ft < 20000:
-        classes = ["J", "K"]
+        base_classes = ["J", "K"]
     elif altitude_ft < 30000:
-        classes = ["K", "L"]
+        base_classes = ["K", "L"]
     else:
-        classes = ["L", "M"]
+        base_classes = ["L", "M"]
+
+    # Larger/heavier tubes need more impulse — shift up by motor size
+    _cls_order = ["F","G","H","I","J","K","L","M","N"]
+    shift = 0
+    if motor_dia_mm >= 98:
+        shift = 2   # 98mm: heavier by ~2 classes
+    elif motor_dia_mm >= 75:
+        shift = 1   # 75mm: heavier by ~1 class
+    shifted = []
+    for c in base_classes:
+        i = _cls_order.index(c) if c in _cls_order else 0
+        shifted.append(_cls_order[min(i + shift, len(_cls_order) - 1)])
+    classes = list(dict.fromkeys(shifted))  # deduplicate preserving order
 
     motor_pref = (constraints.get("motor_preference") or "").lower()
 
@@ -1491,14 +1505,10 @@ async def analyze(messages: list[dict], config: dict, base_constraints: dict | N
         tube_od_in = min(_TUBE_WALL_IN, key=lambda k: abs(k - tube_od_raw))
         wall_in = _TUBE_WALL_IN[tube_od_in]
         tube_id_in = tube_od_in - 2 * wall_in
-        if min_dia:
-            # Snap motor OD to nearest standard size below tube ID
-            std_mm = [29, 38, 54, 75, 98]
-            motor_dia_mm = max((s for s in std_mm if s / 25.4 < tube_id_in - 0.05), default=54)
-            motor_od_in = motor_dia_mm / 25.4
-        else:
-            # Use 75mm if it fits, else 54mm
-            motor_od_in = 2.953 if tube_id_in > 3.05 else 2.126
+        # Snap motor OD to largest standard size that fits with ≥0.05" clearance
+        std_mm = [29, 38, 54, 75, 98, 98]  # 98mm ceiling
+        motor_dia_mm = max((s for s in [29,38,54,75,98] if s / 25.4 < tube_id_in - 0.05), default=29)
+        motor_od_in = motor_dia_mm / 25.4
         manufacturer = constraints.get("tube_manufacturer") or "LOC"
 
     constraints["_tube_od_in"] = tube_od_in

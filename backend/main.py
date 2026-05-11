@@ -10,8 +10,11 @@ from typing import Optional
 
 import httpx
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+
+import design as design_module
 
 from converter import convert_ork, get_stored_results, validate_ork
 from extractor import extract_or_results, extract_or_results_from_stored
@@ -593,3 +596,61 @@ async def monte_carlo_endpoint(
 
     return StreamingResponse(generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ─── Design Builder ───────────────────────────────────────────────────────────
+
+class _DesignMessage(BaseModel):
+    role: str
+    content: str
+
+class _DesignConfig(BaseModel):
+    altitude_target_ft: float = 15000
+    recovery: str = "dual"
+    main_deploy_ft: float = 700
+    drogue_deploy: str = "apogee"
+
+class _DesignChatRequest(BaseModel):
+    messages: list[_DesignMessage]
+    config: _DesignConfig = _DesignConfig()
+
+class _DesignState(BaseModel):
+    tube_od_in: Optional[float] = None
+    fwd_bay_length_in: Optional[float] = None
+    avionics_bay_length_in: Optional[float] = None
+    wall_in: Optional[float] = None
+    nose_shape: Optional[str] = None
+    fin_count: Optional[int] = None
+    fin_root_in: Optional[float] = None
+    fin_span_in: Optional[float] = None
+    motor_designation: Optional[str] = None
+    est_margin_cal: Optional[float] = None
+    est_altitude_ft: Optional[float] = None
+
+class _DesignChatResponse(BaseModel):
+    message: str
+    design_state: Optional[_DesignState] = None
+    ork_b64: Optional[str] = None
+
+
+@app.post("/design/chat", response_model=_DesignChatResponse)
+async def design_chat(req: _DesignChatRequest):
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY not configured")
+    try:
+        result = await design_module.chat(
+            [m.model_dump() for m in req.messages],
+            req.config.model_dump(),
+        )
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Gemini error: {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    ds = _DesignState(**result["design_state"]) if result["design_state"] else None
+    return _DesignChatResponse(
+        message=result["message"],
+        design_state=ds,
+        ork_b64=result["ork_b64"],
+    )

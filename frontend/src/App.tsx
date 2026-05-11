@@ -10,12 +10,13 @@ import { RocketPanel } from './components/RocketPanel';
 import { HowToModal } from './components/HowToModal';
 import { WeatherPanel } from './components/WeatherPanel';
 import { ToolsPage } from './pages/ToolsPage';
+import { DesignPage } from './pages/DesignPage';
 import type { WeatherData } from './components/WeatherPanel';
 import type { LaunchConfig } from './components/LaunchConfig';
 import type { UnitSystem, StabilityUnit } from './components/TimeSeriesCharts';
 import type { ComparisonResponse, FinSetInfo } from './types';
 
-type ActivePage = 'main' | 'tools';
+type ActivePage = 'main' | 'tools' | 'design';
 
 
 const SIM_STAGE_LABELS: Record<string, string> = {
@@ -294,7 +295,7 @@ export default function App() {
           <span className="text-gray-700 text-xs hidden sm:inline">OpenRocket → RocketPy</span>
           {/* Page nav */}
           <div className="flex items-center gap-0.5 bg-gray-900 rounded-lg px-1 py-1 border border-gray-800 ml-2">
-            {(['main', 'tools'] as ActivePage[]).map((p) => (
+            {(['main', 'tools', 'design'] as ActivePage[]).map((p) => (
               <button
                 key={p}
                 onClick={() => setActivePage(p)}
@@ -302,7 +303,7 @@ export default function App() {
                   activePage === p ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'
                 }`}
               >
-                {p === 'main' ? 'Simulation' : 'Tools'}
+                {p === 'main' ? 'Simulation' : p === 'tools' ? 'Tools' : 'Design'}
               </button>
             ))}
           </div>
@@ -382,6 +383,10 @@ export default function App() {
 
       <div className={activePage !== 'tools' ? 'hidden' : ''}>
         <ToolsPage cachedResult={results} config={config} unitSystem={unitSystem} selectedFile={selectedFile} waiverRadiusM={waiverRadiusM} mapContainerRef={mapContainerRef.current} weatherData={weatherData ?? undefined} />
+      </div>
+
+      <div className={activePage !== 'design' ? 'hidden' : ''}>
+        <DesignPage setSelectedFile={setSelectedFile} setActivePage={setActivePage} />
       </div>
 
       <main className={`max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1 ${activePage !== 'main' ? 'hidden' : ''}`}>

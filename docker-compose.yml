@@ -10,6 +10,7 @@ services:
     environment:
       - JAVA_HOME=/opt/java/openjdk
       - OR_JAR_PATH=/opt/OpenRocket-23.09.jar
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
   frontend:
     image: node:20-slim

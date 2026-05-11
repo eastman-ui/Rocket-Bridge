@@ -124,12 +124,19 @@ export function CGCPAnimationTool({ result, unitSystem }: Props) {
   const diamM = params.diameter_m;
   const diagram = result.rocket_diagram;
 
-  // Map nose/tail to SVG x coords using matplotlib axes calibration.
-  // Data x-range in the PNG: [-0.3, total_in + 0.3] where total_in ≈ length_m * 39.3701
+  // Use exact nose/tail fractions from the backend matplotlib transform when available.
+  // Fallback: estimate from axes calibration constants (pre-transform path).
+  const noseFrac = result.diagram_nose_frac;
+  const tailFrac = result.diagram_tail_frac;
+
   const totalInch = lengthM * 39.3701;
   const dataSpan = totalInch + 0.6;
-  const SVG_X0 = AX_LEFT + (0.3 / dataSpan) * AX_W;            // nose
-  const SVG_X1 = AX_LEFT + ((totalInch + 0.3) / dataSpan) * AX_W; // tail
+  const SVG_X0 = noseFrac != null
+    ? noseFrac * IMG_W
+    : AX_LEFT + (0.3 / dataSpan) * AX_W;
+  const SVG_X1 = tailFrac != null
+    ? tailFrac * IMG_W
+    : AX_LEFT + ((totalInch + 0.3) / dataSpan) * AX_W;
   const SVG_W = SVG_X1 - SVG_X0;
 
   // Use exact CP from backend when available, fall back to 65% estimate

@@ -10,8 +10,11 @@ from typing import Optional
 
 import httpx
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+
+import design as design_module
 
 from converter import convert_ork, get_stored_results, validate_ork
 from extractor import extract_or_results, extract_or_results_from_stored
@@ -171,6 +174,8 @@ def _build_response(
         static_margin_pct=rocketpy_raw["static_margin_pct"],
         static_margin_mach03_cal=rocketpy_raw.get("static_margin_mach03_cal", 0.0),
         static_margin_mach03_pct=rocketpy_raw.get("static_margin_mach03_pct", 0.0),
+        cp_position_m=rocketpy_raw.get("cp_position_m"),
+        cg_position_m=rocketpy_raw.get("cg_position_m"),
         burn_out_time_s=rocketpy_raw["burn_out_time_s"],
         impact_velocity_ms=rocketpy_raw.get("impact_velocity_ms", 0.0),
         drift_distance_m=rocketpy_raw.get("drift_distance_m", 0.0),
@@ -191,6 +196,8 @@ def _build_response(
         kml_data=rocketpy_raw.get("kml_data"),
         rocket_params=rocket_params,
         rocket_diagram=rocketpy_raw.get("rocket_diagram"),
+        diagram_nose_frac=rocketpy_raw.get("diagram_nose_frac"),
+        diagram_tail_frac=rocketpy_raw.get("diagram_tail_frac"),
         fin_comparison_diagram=rocketpy_raw.get("fin_comparison_diagram"),
         fin_sets=fin_sets,
         hourly_landings=[HourlyLanding(**h) for h in rocketpy_raw.get("hourly_landings", [])],
@@ -589,3 +596,143 @@ async def monte_carlo_endpoint(
 
     return StreamingResponse(generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ─── Design Builder ───────────────────────────────────────────────────────────
+
+class _DesignMessage(BaseModel):
+    role: str
+    content: str
+
+class _DesignConfig(BaseModel):
+    altitude_target_ft: float = 15000
+    recovery: str = "dual"
+    main_deploy_ft: float = 700
+    drogue_deploy: str = "apogee"
+
+class _DesignChatRequest(BaseModel):
+    messages: list[_DesignMessage]
+    config: _DesignConfig = _DesignConfig()
+    base_constraints: dict = {}
+
+class _DesignState(BaseModel):
+    tube_od_in: Optional[float] = None
+    fwd_bay_length_in: Optional[float] = None
+    avionics_bay_length_in: Optional[float] = None
+    wall_in: Optional[float] = None
+    nose_shape: Optional[str] = None
+    fin_count: Optional[int] = None
+    fin_root_in: Optional[float] = None
+    fin_span_in: Optional[float] = None
+    fin_thickness_in: Optional[float] = None
+    fin_material: Optional[str] = None
+    motor_designation: Optional[str] = None
+    est_margin_cal: Optional[float] = None
+    flutter_safety_factor: Optional[float] = None
+    dry_mass_lb: Optional[float] = None
+    wet_mass_lb: Optional[float] = None
+    total_length_in: Optional[float] = None
+    est_altitude_ft: Optional[float] = None
+
+class _DesignChatResponse(BaseModel):
+    message: str
+    design_state: Optional[_DesignState] = None
+    ork_b64: Optional[str] = None
+
+
+@app.post("/design/chat", response_model=_DesignChatResponse)
+async def design_chat(req: _DesignChatRequest):
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY not configured")
+    try:
+        result = await design_module.chat(
+            [m.model_dump() for m in req.messages],
+            req.config.model_dump(),
+        )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise HTTPException(status_code=429, detail="Gemini rate limit hit — wait a few seconds and try again")
+        raise HTTPException(status_code=502, detail=f"Gemini error: {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    ds = _DesignState(**result["design_state"]) if result["design_state"] else None
+    return _DesignChatResponse(
+        message=result["message"],
+        design_state=ds,
+        ork_b64=result["ork_b64"],
+    )
+
+
+class _MotorOption(BaseModel):
+    designation: str
+    manufacturer: str
+    impulse_class: str
+    predicted_altitude_ft: Optional[float] = None
+    margin_cal: Optional[float] = None
+    flutter_sf: Optional[float] = None
+    twr: Optional[float] = None
+    fin_span_in: Optional[float] = None
+    fin_thickness_in: Optional[float] = None
+    motor_od_in: Optional[float] = None
+    total_impulse_ns: Optional[float] = None
+
+class _AnalyzeResponse(BaseModel):
+    message: str
+    motor_options: list[_MotorOption] = []
+    design_state: Optional[_DesignState] = None
+    ork_b64: Optional[str] = None
+    resolved_constraints: dict = {}
+
+class _SelectMotorRequest(BaseModel):
+    designation: str
+    motor_options: list[_MotorOption]
+    constraints: dict
+    config: _DesignConfig = _DesignConfig()
+
+
+@app.post("/design/analyze", response_model=_AnalyzeResponse)
+async def design_analyze(req: _DesignChatRequest):
+    try:
+        result = await design_module.analyze(
+            [m.model_dump() for m in req.messages],
+            req.config.model_dump(),
+            req.base_constraints,
+        )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise HTTPException(status_code=429, detail="Gemini rate limit hit — wait a few seconds and try again")
+        raise HTTPException(status_code=502, detail=f"Gemini error: {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    ds = _DesignState(**result["design_state"]) if result["design_state"] else None
+    options = [_MotorOption(**o) for o in result.get("motor_options", [])]
+    return _AnalyzeResponse(
+        message=result["message"],
+        motor_options=options,
+        design_state=ds,
+        ork_b64=result["ork_b64"],
+        resolved_constraints=result.get("resolved_constraints", {}),
+    )
+
+
+@app.post("/design/select-motor", response_model=_DesignChatResponse)
+async def design_select_motor(req: _SelectMotorRequest):
+    try:
+        result = await design_module.generate_ork_for_motor(
+            req.designation,
+            [o.model_dump() for o in req.motor_options],
+            req.constraints,
+            req.config.model_dump(),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    ds = _DesignState(**result["design_state"]) if result.get("design_state") else None
+    return _DesignChatResponse(
+        message=f".ork generated for {req.designation}.",
+        design_state=ds,
+        ork_b64=result["ork_b64"],
+    )

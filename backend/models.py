@@ -44,6 +44,8 @@ class RocketPyResults(BaseModel):
     static_margin_pct: float
     static_margin_mach03_cal: float = 0.0
     static_margin_mach03_pct: float = 0.0
+    cp_position_m: Optional[float] = None
+    cg_position_m: Optional[float] = None
     burn_out_time_s: float
     impact_velocity_ms: float = 0.0
     drift_distance_m: float = 0.0
@@ -89,6 +91,8 @@ class ComparisonResponse(BaseModel):
     kml_data: Optional[str] = None
     rocket_params: Optional[RocketParams] = None
     rocket_diagram: Optional[str] = None
+    diagram_nose_frac: Optional[float] = None
+    diagram_tail_frac: Optional[float] = None
     fin_comparison_diagram: Optional[str] = None
     fin_sets: list[FinSetInfo] = []
     hourly_landings: list[HourlyLanding] = []

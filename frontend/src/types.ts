@@ -95,6 +95,8 @@ export interface ComparisonResponse {
   kml_data?: string;
   rocket_params?: RocketParams;
   rocket_diagram?: string;
+  diagram_nose_frac?: number;
+  diagram_tail_frac?: number;
   fin_comparison_diagram?: string;
   fin_sets?: FinSetInfo[];
   hourly_landings?: HourlyLanding[];

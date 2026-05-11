@@ -613,6 +613,7 @@ class _DesignConfig(BaseModel):
 class _DesignChatRequest(BaseModel):
     messages: list[_DesignMessage]
     config: _DesignConfig = _DesignConfig()
+    base_constraints: dict = {}
 
 class _DesignState(BaseModel):
     tube_od_in: Optional[float] = None
@@ -623,8 +624,14 @@ class _DesignState(BaseModel):
     fin_count: Optional[int] = None
     fin_root_in: Optional[float] = None
     fin_span_in: Optional[float] = None
+    fin_thickness_in: Optional[float] = None
+    fin_material: Optional[str] = None
     motor_designation: Optional[str] = None
     est_margin_cal: Optional[float] = None
+    flutter_safety_factor: Optional[float] = None
+    dry_mass_lb: Optional[float] = None
+    wet_mass_lb: Optional[float] = None
+    total_length_in: Optional[float] = None
     est_altitude_ft: Optional[float] = None
 
 class _DesignChatResponse(BaseModel):
@@ -644,6 +651,8 @@ async def design_chat(req: _DesignChatRequest):
             req.config.model_dump(),
         )
     except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise HTTPException(status_code=429, detail="Gemini rate limit hit — wait a few seconds and try again")
         raise HTTPException(status_code=502, detail=f"Gemini error: {e.response.status_code}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -651,6 +660,79 @@ async def design_chat(req: _DesignChatRequest):
     ds = _DesignState(**result["design_state"]) if result["design_state"] else None
     return _DesignChatResponse(
         message=result["message"],
+        design_state=ds,
+        ork_b64=result["ork_b64"],
+    )
+
+
+class _MotorOption(BaseModel):
+    designation: str
+    manufacturer: str
+    impulse_class: str
+    predicted_altitude_ft: Optional[float] = None
+    margin_cal: Optional[float] = None
+    flutter_sf: Optional[float] = None
+    twr: Optional[float] = None
+    fin_span_in: Optional[float] = None
+    fin_thickness_in: Optional[float] = None
+    motor_od_in: Optional[float] = None
+    total_impulse_ns: Optional[float] = None
+
+class _AnalyzeResponse(BaseModel):
+    message: str
+    motor_options: list[_MotorOption] = []
+    design_state: Optional[_DesignState] = None
+    ork_b64: Optional[str] = None
+    resolved_constraints: dict = {}
+
+class _SelectMotorRequest(BaseModel):
+    designation: str
+    motor_options: list[_MotorOption]
+    constraints: dict
+    config: _DesignConfig = _DesignConfig()
+
+
+@app.post("/design/analyze", response_model=_AnalyzeResponse)
+async def design_analyze(req: _DesignChatRequest):
+    try:
+        result = await design_module.analyze(
+            [m.model_dump() for m in req.messages],
+            req.config.model_dump(),
+            req.base_constraints,
+        )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise HTTPException(status_code=429, detail="Gemini rate limit hit — wait a few seconds and try again")
+        raise HTTPException(status_code=502, detail=f"Gemini error: {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    ds = _DesignState(**result["design_state"]) if result["design_state"] else None
+    options = [_MotorOption(**o) for o in result.get("motor_options", [])]
+    return _AnalyzeResponse(
+        message=result["message"],
+        motor_options=options,
+        design_state=ds,
+        ork_b64=result["ork_b64"],
+        resolved_constraints=result.get("resolved_constraints", {}),
+    )
+
+
+@app.post("/design/select-motor", response_model=_DesignChatResponse)
+async def design_select_motor(req: _SelectMotorRequest):
+    try:
+        result = await design_module.generate_ork_for_motor(
+            req.designation,
+            [o.model_dump() for o in req.motor_options],
+            req.constraints,
+            req.config.model_dump(),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    ds = _DesignState(**result["design_state"]) if result.get("design_state") else None
+    return _DesignChatResponse(
+        message=f".ork generated for {req.designation}.",
         design_state=ds,
         ork_b64=result["ork_b64"],
     )

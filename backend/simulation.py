@@ -41,8 +41,9 @@ def _source_cols(func_obj):
 
 
 def _draw_rocket_profile(rkt_params: dict, nc_list: list, fin_list: list,
-                          tail_list: list, motor_params: dict, rocket_obj) -> Optional[str]:
-    """Custom rocket side-profile diagram in imperial units. Returns base64 PNG or None."""
+                          tail_list: list, motor_params: dict, rocket_obj) -> Optional[dict]:
+    """Custom rocket side-profile diagram in imperial units.
+    Returns {"diagram": base64_str, "nose_frac": float, "tail_frac": float} or None."""
     import io as _io
     import base64 as _b64
     import matplotlib.pyplot as plt
@@ -193,12 +194,24 @@ def _draw_rocket_profile(rkt_params: dict, nc_list: list, fin_list: list,
         )
         ax.grid(False)
 
+        # tight_layout fills the figure without cropping — image is exactly
+        # figsize×dpi = 1300×400 px, so transData pixel coords == saved image coords.
+        fig.tight_layout(pad=0.5)
+        fig.canvas.draw()
+
+        # fig.dpi defaults to 100 → figure is 13×100=1300 px wide exactly.
+        fig_w_px = 13.0 * fig.dpi
+        pts = ax.transData.transform([[0.0, 0.0], [total_in, 0.0]])
+        nose_frac = float(np.clip(pts[0, 0] / fig_w_px, 0.0, 1.0))
+        tail_frac = float(np.clip(pts[1, 0] / fig_w_px, 0.0, 1.0))
+
         buf = _io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#0f1117")
+        # dpi=fig.dpi ensures saved pixel width == fig_w_px (no bbox crop mismatch)
+        fig.savefig(buf, format="png", dpi=fig.dpi, facecolor="#0f1117")
         buf.seek(0)
-        result = _b64.b64encode(buf.read()).decode("utf-8")
+        diagram = _b64.b64encode(buf.read()).decode("utf-8")
         plt.close(fig)
-        return result
+        return {"diagram": diagram, "nose_frac": nose_frac, "tail_frac": tail_frac}
 
     except Exception as exc:
         logger.warning("_draw_rocket_profile failed: %s", exc, exc_info=True)
@@ -645,7 +658,7 @@ def run_rocketpy(
     # ------------------------------------------------------------------
     # Rocket diagram — custom imperial profile
     # ------------------------------------------------------------------
-    rocket_diagram = _draw_rocket_profile(
+    _diagram_result = _draw_rocket_profile(
         rkt_params=rkt_params,
         nc_list=nc_list,
         fin_list=fin_list,
@@ -653,6 +666,14 @@ def run_rocketpy(
         motor_params=motor_params,
         rocket_obj=rocket,
     )
+    if _diagram_result is not None:
+        rocket_diagram = _diagram_result["diagram"]
+        diagram_nose_frac = _diagram_result["nose_frac"]
+        diagram_tail_frac = _diagram_result["tail_frac"]
+    else:
+        rocket_diagram = None
+        diagram_nose_frac = None
+        diagram_tail_frac = None
 
     fin_comparison_diagram = _draw_fin_comparison(fin_list)
 
@@ -961,6 +982,8 @@ def run_rocketpy(
         "trajectory_3d": trajectory_3d,
         "weather_source": weather_source,
         "rocket_diagram": rocket_diagram,
+        "diagram_nose_frac": diagram_nose_frac,
+        "diagram_tail_frac": diagram_tail_frac,
         "fin_comparison_diagram": fin_comparison_diagram,
         "launch_lat": lat,
         "launch_lon": lon,

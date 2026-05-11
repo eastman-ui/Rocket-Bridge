@@ -145,6 +145,114 @@ def _static_margin_cal(d: dict) -> float:
     return (cp - cg) / (d["tube_od_in"] * IN_TO_M)
 
 
+# ── ISA atmosphere ────────────────────────────────────────────────────────────
+
+_GAMMA = 1.4
+_R_AIR = 287.05  # J/(kg·K)
+
+
+def _isa_atmosphere(alt_m: float) -> tuple[float, float, float]:
+    """Return (temperature K, pressure Pa, speed_of_sound m/s) via ISA standard."""
+    if alt_m <= 11000:
+        T = 288.15 - 0.0065 * alt_m
+        P = 101325.0 * (T / 288.15) ** 5.2561
+    else:
+        T = 216.65
+        P = 22632.1 * math.exp(-0.0001577 * (alt_m - 11000))
+    a = math.sqrt(_GAMMA * _R_AIR * T)
+    return T, P, a
+
+
+def _estimate_max_mach(altitude_ft: float) -> float:
+    """Ballpark max Mach from apogee altitude for HPR (0.46 @ 5k ft → 0.8 @ 15k)."""
+    return 0.8 * (altitude_ft / 15000) ** 0.5
+
+
+def _flutter_safety_factor(d: dict, altitude_ft: float) -> float:
+    """
+    Raymer (1992) fin flutter safety factor: flutter_Mach / max_Mach.
+    Evaluated at apogee pressure (conservative — lower pressure → lower flutter speed).
+    G10 fiberglass shear modulus 2.62 GPa assumed.
+    """
+    G_shear = 2.62e9  # Pa — G10 fiberglass
+
+    t_m    = d["fin_thickness_in"] * IN_TO_M
+    Cr_m   = d["fin_root_in"]      * IN_TO_M
+    Ct_m   = d["fin_tip_in"]       * IN_TO_M
+    span_m = d["fin_span_in"]      * IN_TO_M
+
+    c_mean   = (Cr_m + Ct_m) / 2.0
+    fin_area = c_mean * span_m
+    AR  = 2.0 * span_m ** 2 / fin_area   # aspect ratio
+    lam = Ct_m / Cr_m                    # taper ratio
+
+    _, P, a = _isa_atmosphere(altitude_ft * FT_TO_M)
+    Vf = a * math.sqrt(G_shear * (t_m / c_mean) ** 3 * (AR + 2) /
+                       (1.337 * AR ** 3 * P * (1 + lam)))
+    flutter_mach = Vf / a
+    return flutter_mach / _estimate_max_mach(altitude_ft)
+
+
+def _validate_fin_flutter(d: dict, altitude_ft: float, target_sf: float = 1.2) -> dict:
+    """
+    Return copy of d with fin_thickness_in stepped up in 0.0625" increments until
+    flutter safety factor >= target_sf (max 0.5").
+    """
+    d = dict(d)
+    if _flutter_safety_factor(d, altitude_ft) >= target_sf:
+        return d
+    for _ in range(8):
+        d["fin_thickness_in"] = round(d["fin_thickness_in"] + 0.0625, 4)
+        if d["fin_thickness_in"] > 0.5:
+            break
+        if _flutter_safety_factor(d, altitude_ft) >= target_sf:
+            break
+    return d
+
+
+_THRUSTCURVE_SEARCH = "https://www.thrustcurve.org/api/v1/search.json"
+
+
+async def _get_motor_candidates(altitude_ft: float) -> list[dict]:
+    """Search ThrustCurve.org by impulse class for motors appropriate for altitude."""
+    import httpx
+
+    if altitude_ft < 5000:
+        classes = ["G", "H"]
+    elif altitude_ft < 10000:
+        classes = ["H", "I"]
+    elif altitude_ft < 15000:
+        classes = ["I", "J"]
+    elif altitude_ft < 20000:
+        classes = ["J", "K"]
+    elif altitude_ft < 30000:
+        classes = ["K", "L"]
+    else:
+        classes = ["L", "M"]
+
+    motors: list[dict] = []
+    async with httpx.AsyncClient(timeout=10) as client:
+        for cls in classes:
+            try:
+                r = await client.get(
+                    _THRUSTCURVE_SEARCH,
+                    params={"impulseClass": cls, "maxResults": 6},
+                )
+                r.raise_for_status()
+                for m in r.json().get("results", []):
+                    motors.append({
+                        "designation": m.get("commonName", ""),
+                        "manufacturer": m.get("manufacturer", ""),
+                        "impulse_class": m.get("impulseClass", cls),
+                        "avg_thrust_n": m.get("avgThrustN"),
+                        "total_impulse_ns": m.get("totImpulseNs"),
+                        "motor_od_in": round(m.get("diameter", 0) / 25.4, 3) if m.get("diameter") else None,
+                    })
+            except Exception:
+                pass
+    return motors[:12]
+
+
 def _tune_fin_span(d: dict, target_min: float = 1.0, target_max: float = 1.5) -> dict:
     """
     Return a copy of d with fin_span_in adjusted so static margin falls in
@@ -226,8 +334,10 @@ def generate_ork(design: dict, config: dict) -> bytes:
     main_deploy_m = config.get("main_deploy_ft", 700) * FT_TO_M
     conf_id       = _uid()
 
-    # ── Auto-tune fin span to ~1.0–1.3 cal (rail departure stability) ────────
+    # ── Auto-tune stability then validate fin flutter ─────────────────────────
     design = _tune_fin_span(design, target_min=1.0, target_max=1.3)
+    altitude_ft = config.get("altitude_target_ft", 15000)
+    design = _validate_fin_flutter(design, altitude_ft)
 
     # ── Geometry ────────────────────────────────────────────────────────────
     tube_od_m  = design["tube_od_in"] * IN_TO_M
@@ -560,9 +670,13 @@ section, half into the aft section. Fwd and aft bulkheads seal the electronics b
 Fin sizing: the backend auto-tunes fin_span_in using Barrowman equations to hit
 the stability target. Supply plausible starting geometry; exact span doesn't matter.
 Root ≈ 2× span, tip ≈ 0.35× root, sweep ≈ 0.29× root, count = 4, thickness = 0.125".
+Fin flutter: the backend also validates flutter resistance (Raymer formula, G10 fiberglass)
+and automatically increases fin_thickness_in if needed. You can still suggest 0.125".
 
 User config: altitude target {altitude_target_ft} ft, recovery: {recovery},
 main deploy: {main_deploy_ft} ft, drogue: {drogue_deploy}.
+
+{motor_candidates}
 
 When ready, output exactly:
 <DESIGN>
@@ -598,24 +712,53 @@ Include explanatory text before the block. Ask one clarifying question at a time
 _DESIGN_RE = re.compile(r"<DESIGN>(.*?)</DESIGN>", re.DOTALL)
 
 
-def _build_design_state(d: dict) -> dict:
+def _total_length_in(d: dict) -> float | None:
+    """Total rocket length nose-to-nozzle-tip in inches."""
+    try:
+        sections = _section_lengths(d)
+        total_m = sum(sections) + NOZZLE_OVERHANG_M
+        return round(total_m / IN_TO_M, 1)
+    except Exception:
+        return None
+
+
+def _build_design_state(d: dict, config: dict | None = None) -> dict:
+    altitude_ft = (config or {}).get("altitude_target_ft", 15000)
     tuned = _tune_fin_span(d, target_min=1.0, target_max=1.3)
+    tuned = _validate_fin_flutter(tuned, altitude_ft)
     try:
         margin = round(_static_margin_cal(tuned), 2)
     except Exception:
         margin = None
+    try:
+        flutter_sf = round(_flutter_safety_factor(tuned, altitude_ft), 2)
+    except Exception:
+        flutter_sf = None
+    try:
+        dry_kg  = _estimate_rocket_dry_mass_kg(tuned)
+        dry_lb  = round(dry_kg * 2.20462, 2)
+        mot_kg  = tuned.get("motor_total_mass_kg") or 0
+        wet_lb  = round((dry_kg + mot_kg) * 2.20462, 2)
+    except Exception:
+        dry_lb = wet_lb = None
     return {
-        "tube_od_in": d.get("tube_od_in"),
-        "fwd_bay_length_in": d.get("fwd_bay_length_in"),
+        "tube_od_in":             d.get("tube_od_in"),
+        "fwd_bay_length_in":      d.get("fwd_bay_length_in"),
         "avionics_bay_length_in": d.get("avionics_bay_length_in"),
-        "wall_in": d.get("wall_in"),
-        "nose_shape": d.get("nose_shape"),
-        "fin_count": tuned.get("fin_count"),
-        "fin_root_in": tuned.get("fin_root_in"),
-        "fin_span_in": tuned.get("fin_span_in"),
-        "motor_designation": d.get("motor_designation"),
-        "est_margin_cal": margin,
-        "est_altitude_ft": None,
+        "wall_in":                d.get("wall_in"),
+        "nose_shape":             d.get("nose_shape"),
+        "fin_count":              tuned.get("fin_count"),
+        "fin_root_in":            tuned.get("fin_root_in"),
+        "fin_span_in":            tuned.get("fin_span_in"),
+        "fin_thickness_in":       tuned.get("fin_thickness_in"),
+        "fin_material":           d.get("fin_material"),
+        "motor_designation":      d.get("motor_designation"),
+        "est_margin_cal":         margin,
+        "flutter_safety_factor":  flutter_sf,
+        "dry_mass_lb":            dry_lb,
+        "wet_mass_lb":            wet_lb,
+        "total_length_in":        _total_length_in(tuned),
+        "est_altitude_ft":        None,
     }
 
 
@@ -625,11 +768,29 @@ async def chat(messages: list[dict], config: dict) -> dict:
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not configured")
 
+    altitude_ft = config.get("altitude_target_ft", 15000)
+    motor_list = await _get_motor_candidates(altitude_ft)
+    if motor_list:
+        lines = [f"Available motors for ~{int(altitude_ft):,} ft (from ThrustCurve.org):"]
+        for m in motor_list:
+            od = f"{m['motor_od_in']}\"" if m.get("motor_od_in") else "?"
+            lines.append(
+                f"  - {m['designation']} ({m['manufacturer']}) "
+                f"| {m['impulse_class']}-class "
+                f"| {od} OD "
+                f"| avg {m.get('avg_thrust_n', '?')} N "
+                f"| total {m.get('total_impulse_ns', '?')} N·s"
+            )
+        motor_section = "\n".join(lines)
+    else:
+        motor_section = ""
+
     system_text = _SYSTEM_PROMPT.format(
-        altitude_target_ft=config.get("altitude_target_ft", 15000),
+        altitude_target_ft=altitude_ft,
         recovery=config.get("recovery", "dual"),
         main_deploy_ft=config.get("main_deploy_ft", 700),
         drogue_deploy=config.get("drogue_deploy", "apogee"),
+        motor_candidates=motor_section,
     )
 
     contents = []
@@ -642,8 +803,15 @@ async def chat(messages: list[dict], config: dict) -> dict:
         "contents": contents,
     }
 
+    import asyncio as _asyncio
+    url = _GEMINI_URL.format(key=api_key)
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(_GEMINI_URL.format(key=api_key), json=payload)
+        for attempt in range(3):
+            resp = await client.post(url, json=payload)
+            if resp.status_code != 429:
+                break
+            if attempt < 2:
+                await _asyncio.sleep(5 * (attempt + 1))
     resp.raise_for_status()
     text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -652,9 +820,767 @@ async def chat(messages: list[dict], config: dict) -> dict:
     match = _DESIGN_RE.search(text)
     if match:
         design_data = json.loads(match.group(1).strip())
-        design_state = _build_design_state(design_data)
+        design_state = _build_design_state(design_data, config)
         ork_bytes = generate_ork(design_data, config)
         ork_b64 = base64.b64encode(ork_bytes).decode()
         text = _DESIGN_RE.sub("", text).strip()
 
     return {"message": text, "design_state": design_state, "ork_b64": ork_b64}
+
+
+# ── Deterministic design analyzer ────────────────────────────────────────────
+
+# Shear modulus (Pa) per fin material
+FIN_SHEAR_MODULUS: dict[str, float] = {
+    "aluminum": 26.0e9,
+    "fiberglass": 2.62e9,
+    "carbon": 27.0e9,
+    "plywood": 0.60e9,
+}
+
+# Standard tube sizes: OD → wall thickness (inches)
+_TUBE_WALL_IN: dict[float, float] = {
+    1.225: 0.058,
+    1.635: 0.058,
+    2.152: 0.054,
+    2.26:  0.065,
+    3.00:  0.082,
+    3.15:  0.065,
+    3.90:  0.082,
+    4.00:  0.065,
+    4.024: 0.093,
+    6.007: 0.125,
+}
+
+_PARSE_SYSTEM = """\
+Extract rocket design constraints from the user's message(s) as JSON.
+Return ONLY valid JSON — no markdown fences, no extra text.
+
+Schema (all nullable except altitude_target_ft):
+{
+  "tube_od_in": <float|null>,
+  "tube_manufacturer": <"LOC"|"Madcow"|"Wildman"|"Apogee"|null>,
+  "min_diameter": <bool>,
+  "fin_material": <"aluminum"|"fiberglass"|"carbon"|"plywood"|null>,
+  "fin_count": <int|null>,
+  "altitude_target_ft": <float>,
+  "motor_preference": <string|null>,
+  "nose_length_in": <float|null>,
+  "nose_length_delta_in": <float|null>,
+  "fwd_bay_length_in": <float|null>,
+  "fwd_bay_delta_in": <float|null>,
+  "avionics_bay_length_in": <float|null>,
+  "avionics_bay_delta_in": <float|null>,
+  "notes": <string>
+}
+
+Rules:
+- "3 inch" → tube_od_in=3.0 (user means nominal 3")
+- "min diameter" / "min-dia" → min_diameter=true
+- "aluminum fin can" → fin_material="aluminum"
+- If motor preference given (e.g. "use the J270", "Aerotech K"), set motor_preference
+- altitude_target_ft falls back to the config value if not stated in message
+- "make nose 2 inches longer" → nose_length_delta_in=2.0
+- "shorten forward section by 3" → fwd_bay_delta_in=-3.0
+- "14 inch nose" → nose_length_in=14.0  (absolute, not delta)
+- Use *_delta_in for relative changes, *_in for absolute values
+"""
+
+
+def _regex_parse_constraints(text: str, config: dict) -> dict:
+    """
+    Fast regex-based constraint extractor — no LLM required.
+    Handles the most common HPR phrasings reliably.
+    """
+    t = text.lower()
+
+    # Tube OD: "3 inch", "4\"", "3.9 inch", "98mm"
+    tube_od = None
+    m = re.search(r'(\d+(?:\.\d+)?)\s*(?:"|inch(?:es)?|in\b)', t)
+    if m:
+        v = float(m.group(1))
+        # Snap to closest standard OD
+        candidates = list(_TUBE_WALL_IN.keys())
+        tube_od = min(candidates, key=lambda k: abs(k - v))
+    # mm diameter: "75mm", "98mm"
+    if tube_od is None:
+        m = re.search(r'(\d+)\s*mm', t)
+        if m:
+            mm = int(m.group(1))
+            # Motor size → standard tube roughly 3-4mm larger OD
+            approx_od_in = (mm + 3) / 25.4
+            candidates = list(_TUBE_WALL_IN.keys())
+            tube_od = min(candidates, key=lambda k: abs(k - approx_od_in))
+
+    # Min diameter
+    min_dia = bool(re.search(r'min(?:imum)?\s*(?:-\s*)?diam(?:eter)?|min\s*dia', t))
+
+    # Fin material
+    fin_material = None
+    if re.search(r'alum(?:inum|inium)', t):
+        fin_material = "aluminum"
+    elif re.search(r'carbon\s*(?:fiber|fibre|cf)', t):
+        fin_material = "carbon"
+    elif re.search(r'fiberglass|fg|g10|g12', t):
+        fin_material = "fiberglass"
+    elif re.search(r'ply(?:wood)?', t):
+        fin_material = "plywood"
+
+    # Fin count
+    fin_count = None
+    m = re.search(r'(\d)\s*(?:-\s*)?fin', t)
+    if m:
+        fin_count = int(m.group(1))
+
+    # Altitude from message (e.g. "15k ft", "10,000 feet", "15000")
+    alt_ft = config.get("altitude_target_ft", 15000)
+    m = re.search(r'(\d+(?:[.,]\d+)?)\s*k?\s*(?:ft|feet|foot)', t)
+    if m:
+        raw_val = m.group(1).replace(",", "")
+        parsed = float(raw_val)
+        alt_ft = parsed * 1000 if "k" in m.group(0) else parsed
+
+    # Motor preference: "use the J270", "K550", "Aerotech"
+    motor_pref = None
+    m = re.search(r'\b(?:use\s+(?:the\s+)?)?([A-Z]\d{2,4}[A-Z\-]*)', text)
+    if m:
+        motor_pref = m.group(1)
+    if not motor_pref:
+        for mfr in ("aerotech", "cesaroni", "estes", "animal motor", "loki", "kosdon"):
+            if mfr in t:
+                motor_pref = mfr
+                break
+
+    # ── Geometry: absolute lengths and deltas ────────────────────────────────
+    # Sections: (pattern, abs_key, delta_key)
+    _SECS = [
+        (r'nose(?:\s+cone)?',
+         'nose_length_in', 'nose_length_delta_in'),
+        (r'forward\s+(?:section|bay)|fwd(?:\s+(?:section|bay))?|main\s+(?:chute\s+)?bay',
+         'fwd_bay_length_in', 'fwd_bay_delta_in'),
+        (r'avionics?\s+(?:bay|section)|e(?:lectronics?\s+)?bay|ebay',
+         'avionics_bay_length_in', 'avionics_bay_delta_in'),
+    ]
+    geo: dict = {}
+    for sec_pat, abs_key, delta_key in _SECS:
+        # Absolute: "set/make [the] [section] [to] X [inches]"
+        _m = re.search(
+            rf'(?:set|make)\s+(?:the\s+)?(?:{sec_pat})\s+(?:to\s+)?(\d+(?:\.\d+)?)\s*(?:inch(?:es)?|in|")?', t)
+        if _m: geo[abs_key] = float(_m.group(1)); continue
+        # Absolute: "X inch [section]"
+        _m = re.search(rf'(\d+(?:\.\d+)?)\s*[-\s]?(?:inch(?:es)?|in|")\s+(?:{sec_pat})', t)
+        if _m: geo[abs_key] = float(_m.group(1)); continue
+        # Absolute: "[section] [to] X inches"
+        _m = re.search(rf'(?:{sec_pat})\s+(?:to\s+)?(\d+(?:\.\d+)?)\s*(?:inch(?:es)?|in|")', t)
+        if _m: geo[abs_key] = float(_m.group(1)); continue
+        # Delta: "add/increase X [in] [to/on] [section]"
+        _m = re.search(
+            rf'(?:add|increase|extend)\s+(\d+(?:\.\d+)?)\s*(?:inch(?:es)?|in|")?\s+(?:(?:to|on)\s+(?:the\s+)?)?(?:{sec_pat})', t)
+        if not _m:
+            _m = re.search(rf'(?:increase|extend)\s+(?:the\s+)?(?:{sec_pat})\s+(?:by\s+)?(\d+(?:\.\d+)?)', t)
+        if _m: geo[delta_key] = float(_m.group(1)); continue
+        # Delta: "[section] X [in] longer"
+        _m = re.search(rf'(?:{sec_pat})\s+(\d+(?:\.\d+)?)\s*(?:inch(?:es)?|in|")?\s*longer', t)
+        if _m: geo[delta_key] = float(_m.group(1)); continue
+        # Delta: "make [section] X longer"
+        _m = re.search(rf'make\s+(?:the\s+)?(?:{sec_pat})\s+(\d+(?:\.\d+)?)\s*(?:inch(?:es)?|in|")?\s*longer', t)
+        if _m: geo[delta_key] = float(_m.group(1)); continue
+        # Delta: "longer [section]" or "[section] longer" → default ±2"
+        if re.search(rf'longer\s+(?:{sec_pat})|(?:{sec_pat})\s+longer', t):
+            geo[delta_key] = 2.0; continue
+        # Delta negative: "shorten/reduce/remove X [in] from [section]"
+        _m = re.search(
+            rf'(?:shorten|reduce|remove|decrease)\s+(?:(\d+(?:\.\d+)?)\s*(?:inch(?:es)?|in|")?\s+(?:from\s+)?)?(?:the\s+)?(?:{sec_pat})', t)
+        if not _m:
+            _m = re.search(rf'(?:{sec_pat})\s+(?:(\d+(?:\.\d+)?)\s*(?:inch(?:es)?|in|")?\s*)?shorter', t)
+        if _m:
+            delta = float(_m.group(1)) if _m.lastindex and _m.group(1) else 2.0
+            geo[delta_key] = -delta; continue
+        if re.search(rf'shorter\s+(?:{sec_pat})|(?:{sec_pat})\s+shorter', t):
+            geo[delta_key] = -2.0
+
+    return {
+        "tube_od_in":             tube_od,
+        "tube_manufacturer":      None,
+        "min_diameter":           min_dia,
+        "fin_material":           fin_material,
+        "fin_count":              fin_count,
+        "altitude_target_ft":     alt_ft,
+        "motor_preference":       motor_pref,
+        "nose_length_in":         geo.get("nose_length_in"),
+        "nose_length_delta_in":   geo.get("nose_length_delta_in"),
+        "fwd_bay_length_in":      geo.get("fwd_bay_length_in"),
+        "fwd_bay_delta_in":       geo.get("fwd_bay_delta_in"),
+        "avionics_bay_length_in": geo.get("avionics_bay_length_in"),
+        "avionics_bay_delta_in":  geo.get("avionics_bay_delta_in"),
+        "notes": "",
+    }
+
+
+async def _parse_constraints(messages: list[dict], config: dict) -> dict:
+    """
+    Extract structured constraints from conversation.
+    Tries Gemini first; falls back to regex parser on 429 or missing key.
+    """
+    import httpx as _httpx
+
+    combined = "\n".join(m["content"] for m in messages if m.get("role") == "user")
+
+    # Try Gemini (small single call)
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if api_key:
+        user_text = (
+            f"Config: altitude_target_ft={config.get('altitude_target_ft', 15000)}, "
+            f"recovery={config.get('recovery', 'dual')}\n\nUser messages:\n{combined}"
+        )
+        payload = {
+            "systemInstruction": {"parts": [{"text": _PARSE_SYSTEM}]},
+            "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+            "generationConfig": {"temperature": 0.1},
+        }
+        url = _GEMINI_URL.format(key=api_key)
+        import asyncio as _aio
+        try:
+            async with _httpx.AsyncClient(timeout=30) as client:
+                for attempt in range(3):
+                    r = await client.post(url, json=payload)
+                    if r.status_code != 429:
+                        break
+                    if attempt < 2:
+                        await _aio.sleep(5 * (attempt + 1))
+            if r.status_code == 200:
+                raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                raw = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+                constraints = json.loads(raw)
+                if not constraints.get("altitude_target_ft"):
+                    constraints["altitude_target_ft"] = config.get("altitude_target_ft", 15000)
+                return constraints
+        except Exception:
+            pass  # fall through to regex
+
+    # Regex fallback — works without Gemini
+    return _regex_parse_constraints(combined, config)
+
+
+_GEO_DEFAULTS: dict[str, object] = {
+    "nose_length_in":         lambda od: round(od * 3.5, 1),
+    "fwd_bay_length_in":      lambda od: round(od * 5.5, 1),
+    "avionics_bay_length_in": lambda _: 9.0,
+}
+_GEO_DELTA_MAP = {
+    "nose_length_delta_in":   "nose_length_in",
+    "fwd_bay_delta_in":       "fwd_bay_length_in",
+    "avionics_bay_delta_in":  "avionics_bay_length_in",
+}
+_GEO_MIN_IN = 4.0
+
+
+def _merge_constraints(parsed: dict, base: dict) -> dict:
+    """
+    Merge newly-parsed constraints onto previous base constraints.
+    - Non-null absolute fields in parsed override base.
+    - Delta fields (e.g. nose_length_delta_in) accumulate onto base absolute value.
+    - Geometry values are clamped to _GEO_MIN_IN (4").
+    """
+    merged = dict(base)
+
+    # Apply non-delta fields first
+    for key, val in parsed.items():
+        if key not in _GEO_DELTA_MAP and val is not None:
+            merged[key] = val
+
+    # Apply deltas onto resolved absolute values
+    tube_od = merged.get("tube_od_in") or 3.0
+    for delta_key, abs_key in _GEO_DELTA_MAP.items():
+        delta = parsed.get(delta_key)
+        if delta is None:
+            continue
+        if merged.get(abs_key) is not None:
+            current = merged[abs_key]
+        else:
+            current = _GEO_DEFAULTS[abs_key](tube_od)
+        merged[abs_key] = max(_GEO_MIN_IN, round(current + delta, 1))
+
+    return merged
+
+
+async def _search_motors_for_design(constraints: dict) -> list[dict]:
+    """Query ThrustCurve by impulse class + motor diameter, return full metadata."""
+    import httpx as _httpx
+
+    altitude_ft = constraints.get("altitude_target_ft", 15000)
+    motor_od_in = constraints.get("_motor_od_in", 2.953)  # resolved before calling
+    motor_dia_mm = round(motor_od_in * 25.4)
+
+    if altitude_ft < 5000:
+        classes = ["G", "H"]
+    elif altitude_ft < 10000:
+        classes = ["H", "I"]
+    elif altitude_ft < 15000:
+        classes = ["I", "J"]
+    elif altitude_ft < 20000:
+        classes = ["J", "K"]
+    elif altitude_ft < 30000:
+        classes = ["K", "L"]
+    else:
+        classes = ["L", "M"]
+
+    motor_pref = (constraints.get("motor_preference") or "").lower()
+
+    motors: list[dict] = []
+    async with _httpx.AsyncClient(timeout=10) as client:
+        for cls in classes:
+            try:
+                r = await client.get(
+                    _THRUSTCURVE_SEARCH,
+                    params={"impulseClass": cls, "diameter": motor_dia_mm, "maxResults": 10},
+                )
+                r.raise_for_status()
+                for m in r.json().get("results", []):
+                    if m.get("availability") == "OOP":
+                        continue  # skip out-of-production
+                    entry = {
+                        "id": m.get("motorId"),
+                        "designation": m.get("commonName", ""),
+                        "manufacturer": m.get("manufacturer", ""),
+                        "impulse_class": m.get("impulseClass", cls),
+                        "avg_thrust_n": m.get("avgThrustN"),
+                        "total_impulse_ns": m.get("totImpulseNs"),
+                        "burn_time_s": m.get("burnTimeS"),
+                        "motor_od_mm": m.get("diameter"),
+                        "motor_od_in": round(m.get("diameter", 0) / 25.4, 3),
+                        "motor_len_mm": m.get("length"),
+                        "motor_len_in": round(m.get("length", 0) / 25.4, 2) if m.get("length") else None,
+                        "prop_mass_kg": (m.get("propWeightG") or 0) / 1000,
+                    }
+                    motors.append(entry)
+            except Exception:
+                pass
+
+    # If motor preference mentioned, sort matching motors first
+    if motor_pref:
+        def _pref_key(m: dict) -> int:
+            d = m["designation"].lower()
+            mfr = m["manufacturer"].lower()
+            return 0 if (motor_pref in d or motor_pref in mfr) else 1
+        motors.sort(key=_pref_key)
+
+    return motors
+
+
+def _estimate_rocket_dry_mass_kg(design: dict) -> float:
+    """Estimate dry rocket mass (no motor) in kg from tube geometry."""
+    tube_od_m = design["tube_od_in"] * IN_TO_M
+    tube_r    = tube_od_m / 2
+    wall_m    = design["wall_in"] * IN_TO_M
+    tube_ir   = tube_r - wall_m
+    tube_area = math.pi * (tube_r ** 2 - tube_ir ** 2)
+
+    L_nose, fwd_len, sw_len, aft_len = _section_lengths(design)
+
+    tube_mass  = FG_DENSITY * tube_area * (L_nose * 0.5 + fwd_len + sw_len + aft_len)
+    av_mass    = design.get("avionics_mass_kg", 0.3)
+    fin_thick_m = design["fin_thickness_in"] * IN_TO_M
+    fin_mass   = (
+        FG_DENSITY * fin_thick_m
+        * (design["fin_root_in"] + design["fin_tip_in"]) / 2 * IN_TO_M
+        * design["fin_span_in"] * IN_TO_M
+        * design["fin_count"]
+    )
+    return tube_mass + av_mass + fin_mass
+
+
+def _estimate_altitude_ft(design: dict, motor: dict) -> float:
+    """
+    Simplified ballistic apogee estimate (vertical flight, quadratic drag).
+
+    Uses exact coast formula: h = (1/2k) * ln(1 + k*v_bo²/g)
+    where k = Cd*A*rho / (2 * m_burnout).
+    """
+    g   = 9.81
+    Cd  = 0.40   # typical HPR min-dia
+    rho = 1.225  # kg/m³ sea level (conservative — lower altitude = more drag)
+    tube_od_m = design["tube_od_in"] * IN_TO_M
+    A = math.pi * (tube_od_m / 2) ** 2
+
+    prop_kg = motor.get("prop_mass_kg") or (motor.get("total_impulse_ns", 0) / (180 * g))
+    # Motor hardware mass ≈ prop mass × 0.6 (typical composite reload)
+    hw_kg = prop_kg * 0.6
+
+    dry_kg = _estimate_rocket_dry_mass_kg(design)
+    m_launch   = dry_kg + hw_kg + prop_kg
+    m_burnout  = dry_kg + hw_kg
+    m_avg      = (m_launch + m_burnout) / 2
+
+    total_impulse = motor.get("total_impulse_ns", 0)
+    # Burnout velocity via impulse-momentum (average mass), corrected 18% for drag during burn
+    v_bo = (total_impulse / m_avg) * 0.82
+
+    # Exact ballistic coast with quadratic drag
+    k = (Cd * A * rho) / (2 * m_burnout)
+    h_coast_m = (1 / (2 * k)) * math.log(1 + k * v_bo ** 2 / g)
+    return h_coast_m / FT_TO_M
+
+
+def _flutter_sf_g(d: dict, altitude_ft: float, G_pa: float) -> float:
+    """Raymer flutter safety factor with explicit shear modulus G_pa (Pa)."""
+    t_m    = d["fin_thickness_in"] * IN_TO_M
+    Cr_m   = d["fin_root_in"]      * IN_TO_M
+    Ct_m   = d["fin_tip_in"]       * IN_TO_M
+    span_m = d["fin_span_in"]      * IN_TO_M
+    c_mean = (Cr_m + Ct_m) / 2.0
+    AR     = 2.0 * span_m ** 2 / (c_mean * span_m)
+    lam    = Ct_m / Cr_m
+    _, P, a = _isa_atmosphere(altitude_ft * FT_TO_M)
+    Vf = a * math.sqrt(G_pa * (t_m / c_mean) ** 3 * (AR + 2) /
+                       (1.337 * AR ** 3 * P * (1 + lam)))
+    return (Vf / a) / _estimate_max_mach(altitude_ft)
+
+
+def _build_design_for_motor(motor: dict, constraints: dict, config: dict) -> dict:
+    """Assemble a complete design dict for a given motor + constraints."""
+    tube_od_in    = constraints["_tube_od_in"]
+    wall_in       = constraints["_wall_in"]
+    fin_material  = constraints.get("fin_material") or "fiberglass"
+    fin_count     = constraints.get("fin_count") or 4
+    altitude_ft   = constraints.get("altitude_target_ft", 15000)
+    min_dia       = constraints.get("min_diameter", False)
+
+    # Fin proportions scaled to tube OD
+    root_in  = round(tube_od_in * 1.8, 2)
+    tip_in   = round(root_in * 0.35, 2)
+    sweep_in = round(root_in * 0.45, 2)
+    thick_in = 0.25 if fin_material == "aluminum" else 0.125
+
+    d = {
+        "tube_od_in":             tube_od_in,
+        "wall_in":                wall_in,
+        "tube_manufacturer":      constraints.get("_tube_manufacturer", "LOC"),
+        "nose_shape":             "ogive",
+        "nose_length_in":         constraints.get("nose_length_in") or round(tube_od_in * 3.5, 1),
+        "fwd_bay_length_in":      constraints.get("fwd_bay_length_in") or round(tube_od_in * 5.5, 1),
+        "avionics_bay_length_in": constraints.get("avionics_bay_length_in") or 9.0,
+        "avionics_mass_kg":       0.30,
+        "fin_material":           fin_material,
+        "fin_count":              fin_count,
+        "fin_root_in":            root_in,
+        "fin_tip_in":             tip_in,
+        "fin_sweep_in":           sweep_in,
+        "fin_span_in":            round(tube_od_in * 1.2, 2),  # starting guess
+        "fin_thickness_in":       thick_in,
+        "motor_designation":      motor["designation"],
+        "motor_manufacturer":     motor["manufacturer"],
+        "motor_od_in":            motor["motor_od_in"],
+        "motor_length_in":        motor["motor_len_in"],
+        "motor_total_mass_kg":    motor.get("prop_mass_kg", 0) * 1.6,
+        "drogue_dia_in":          round(tube_od_in * 4),
+        "main_dia_in":            round(tube_od_in * 12),
+    }
+
+    # Tune fin span for stability
+    d = _tune_fin_span(d, target_min=1.0, target_max=1.3)
+
+    # Validate flutter with material-correct G
+    G = FIN_SHEAR_MODULUS.get(fin_material, 2.62e9)
+    sf = _flutter_sf_g(d, altitude_ft, G)
+    target_sf = 1.2
+    if sf < target_sf:
+        for _ in range(8):
+            d["fin_thickness_in"] = round(d["fin_thickness_in"] + 0.0625, 4)
+            if d["fin_thickness_in"] > 0.5:
+                break
+            if _flutter_sf_g(d, altitude_ft, G) >= target_sf:
+                break
+
+    return d
+
+
+def _format_options_text(options: list[dict], constraints: dict) -> str:
+    """Format motor options as a plain-text table."""
+    altitude_ft = constraints.get("altitude_target_ft", 15000)
+    tube_od     = constraints.get("_tube_od_in", 3.0)
+    min_dia     = constraints.get("min_diameter", False)
+    fin_mat     = constraints.get("fin_material") or "fiberglass"
+
+    lines = [
+        f"{'Min-diameter' if min_dia else 'Standard'} {tube_od}\" rocket — "
+        f"{int(altitude_ft):,} ft target | {fin_mat} fins",
+        "",
+        f"{'Motor':<12} {'Manufacturer':<22} {'Alt (ft)':<10} {'Margin':<8} {'Flutter SF':<11} {'TWR':<5}",
+        "-" * 72,
+    ]
+    for i, o in enumerate(options[:10]):
+        alt = f"{int(o['predicted_altitude_ft']):,}" if o.get("predicted_altitude_ft") else "?"
+        sf  = str(o.get("flutter_sf", "?"))
+        tag = "  ← best match" if i == 0 else ""
+        lines.append(
+            f"{o['designation']:<12} {o['manufacturer']:<22} {alt:<10} "
+            f"{o['margin_cal']:<8} {sf:<11} {o.get('twr', '?'):<5}{tag}"
+        )
+
+    best_alt  = options[0].get("predicted_altitude_ft") or 0
+    gap_pct   = (altitude_ft - best_alt) / altitude_ft * 100
+    classes   = {o["impulse_class"] for o in options}
+    lines.append("")
+    if gap_pct > 25:
+        multi = len(classes) > 1
+        lines.append(
+            f"NOTE: best match reaches ~{int(best_alt):,} ft ({gap_pct:.0f}% below {int(altitude_ft):,} ft target). "
+            + (f"Options from multiple impulse classes shown above." if multi
+               else "No higher-class motors found for this tube/manufacturer combo.")
+        )
+    lines += [
+        f".ork generated for {options[0]['designation']} (best match).",
+        "Click a motor card below to switch, or type 'use [designation]' to re-run.",
+    ]
+    return "\n".join(lines)
+
+
+async def analyze(messages: list[dict], config: dict, base_constraints: dict | None = None) -> dict:
+    """
+    Parse natural language → search motors → rank by altitude/stability → generate .ork.
+    Replaces multi-turn Gemini design conversation with a deterministic engine.
+    base_constraints carries resolved state from the previous call so follow-up messages
+    (e.g. "make nose longer", "only AeroTech") accumulate correctly.
+    """
+    # 1. Extract constraints from latest messages, then merge onto base.
+    # For follow-ups (base non-empty), parse only the last user message so earlier
+    # messages don't override accumulated geometry/preference changes.
+    base = base_constraints or {}
+    parse_msgs = [messages[-1]] if base and messages else messages
+    parsed = await _parse_constraints(parse_msgs, config)
+    constraints = _merge_constraints(parsed, base)
+    altitude_ft = constraints.get("altitude_target_ft", config.get("altitude_target_ft", 15000))
+
+    # 2. Resolve tube dimensions
+    tube_od_raw = constraints.get("tube_od_in") or 3.00
+    min_dia = constraints.get("min_diameter", False)
+
+    if min_dia and abs(tube_od_raw - 3.0) < 0.2:
+        # "3 inch min diameter" → Wildman 3.15" tube fits 75mm motor
+        tube_od_in = 3.15
+        wall_in = 0.065
+        motor_od_in = 2.953   # 75mm motor OD
+        manufacturer = "Wildman"
+    else:
+        # Find closest standard tube
+        tube_od_in = min(_TUBE_WALL_IN, key=lambda k: abs(k - tube_od_raw))
+        wall_in = _TUBE_WALL_IN[tube_od_in]
+        tube_id_in = tube_od_in - 2 * wall_in
+        if min_dia:
+            # Snap motor OD to nearest standard size below tube ID
+            std_mm = [29, 38, 54, 75, 98]
+            motor_dia_mm = max((s for s in std_mm if s / 25.4 < tube_id_in - 0.05), default=54)
+            motor_od_in = motor_dia_mm / 25.4
+        else:
+            # Use 75mm if it fits, else 54mm
+            motor_od_in = 2.953 if tube_id_in > 3.05 else 2.126
+        manufacturer = constraints.get("tube_manufacturer") or "LOC"
+
+    constraints["_tube_od_in"] = tube_od_in
+    constraints["_wall_in"] = wall_in
+    constraints["_motor_od_in"] = motor_od_in
+    constraints["_tube_manufacturer"] = manufacturer
+    constraints["altitude_target_ft"] = altitude_ft
+
+    # 3. Search motors
+    motors = await _search_motors_for_design(constraints)
+    motors = [m for m in motors if m.get("motor_len_in")]  # need length for design
+
+    if not motors:
+        return {
+            "message": (
+                f"No in-production motors found for {motor_od_in:.3f}\" OD "
+                f"in the expected impulse class. Try a different tube size or altitude target."
+            ),
+            "motor_options": [],
+            "design_state": None,
+            "ork_b64": None,
+        }
+
+    # 4. Evaluate each motor
+    G_pa = FIN_SHEAR_MODULUS.get(constraints.get("fin_material") or "fiberglass", 2.62e9)
+    options: list[dict] = []
+    for m in motors:
+        try:
+            d = _build_design_for_motor(m, constraints, config)
+            margin = round(_static_margin_cal(d), 2)
+            predicted_alt = round(_estimate_altitude_ft(d, m))
+            flutter_sf = round(_flutter_sf_g(d, altitude_ft, G_pa), 2)
+            dry_kg = _estimate_rocket_dry_mass_kg(d)
+            total_kg = dry_kg + m.get("prop_mass_kg", 0) * 1.6
+            twr = round((m.get("avg_thrust_n") or 0) / (total_kg * 9.81), 1)
+            options.append({
+                "designation": m["designation"],
+                "manufacturer": m["manufacturer"],
+                "impulse_class": m["impulse_class"],
+                "predicted_altitude_ft": predicted_alt,
+                "margin_cal": margin,
+                "flutter_sf": flutter_sf,
+                "twr": twr,
+                "fin_span_in": round(d["fin_span_in"], 2),
+                "fin_thickness_in": d["fin_thickness_in"],
+                "motor_od_in": m["motor_od_in"],
+                "total_impulse_ns": m.get("total_impulse_ns"),
+                "_design": d,
+            })
+        except Exception:
+            continue
+
+    # 5. Apply manufacturer/designation filter if preference given
+    motor_pref = (constraints.get("motor_preference") or "").lower().strip()
+    if motor_pref:
+        # Determine if preference is a designation (e.g. "J270") or manufacturer name
+        is_designation = bool(re.match(r'^[a-z]\d{2,}', motor_pref))
+        if is_designation:
+            filtered = [o for o in options if motor_pref in o["designation"].lower()]
+        else:
+            filtered = [o for o in options if motor_pref in o["manufacturer"].lower()]
+        if filtered:
+            options = filtered
+
+    # Sort: closest to target altitude first
+    options.sort(key=lambda o: abs(o["predicted_altitude_ft"] - altitude_ft))
+
+    # 5b. If best match is >30% below target, also search the next impulse class up
+    if options and options[0]["predicted_altitude_ft"] < altitude_ft * 0.70:
+        _cls_order = ["F", "G", "H", "I", "J", "K", "L", "M", "N"]
+        current_classes = set(o["impulse_class"] for o in options)
+        max_cls = max(current_classes, key=lambda c: _cls_order.index(c) if c in _cls_order else 0)
+        idx = _cls_order.index(max_cls) if max_cls in _cls_order else -1
+        if idx >= 0 and idx + 1 < len(_cls_order):
+            next_cls = _cls_order[idx + 1]
+            import httpx as _hx
+            async with _hx.AsyncClient(timeout=10) as _cl:
+                try:
+                    _r = await _cl.get(
+                        _THRUSTCURVE_SEARCH,
+                        params={"impulseClass": next_cls,
+                                "diameter": round(motor_od_in * 25.4),
+                                "maxResults": 8},
+                    )
+                    for _m in _r.json().get("results", []):
+                        if _m.get("availability") == "OOP" or not _m.get("length"):
+                            continue
+                        _entry = {
+                            "id": _m.get("motorId"),
+                            "designation": _m.get("commonName", ""),
+                            "manufacturer": _m.get("manufacturer", ""),
+                            "impulse_class": next_cls,
+                            "avg_thrust_n": _m.get("avgThrustN"),
+                            "total_impulse_ns": _m.get("totImpulseNs"),
+                            "burn_time_s": _m.get("burnTimeS"),
+                            "motor_od_in": round(_m.get("diameter", 0) / 25.4, 3),
+                            "motor_len_in": round(_m.get("length", 0) / 25.4, 2),
+                            "prop_mass_kg": (_m.get("propWeightG") or 0) / 1000,
+                        }
+                        try:
+                            _d = _build_design_for_motor(_entry, constraints, config)
+                            _margin = round(_static_margin_cal(_d), 2)
+                            _alt = round(_estimate_altitude_ft(_d, _entry))
+                            _sf = round(_flutter_sf_g(_d, altitude_ft, G_pa), 2)
+                            _dry = _estimate_rocket_dry_mass_kg(_d)
+                            _total = _dry + _entry.get("prop_mass_kg", 0) * 1.6
+                            _twr = round((_entry.get("avg_thrust_n") or 0) / (_total * 9.81), 1)
+                            options.append({
+                                "designation": _entry["designation"],
+                                "manufacturer": _entry["manufacturer"],
+                                "impulse_class": next_cls,
+                                "predicted_altitude_ft": _alt,
+                                "margin_cal": _margin,
+                                "flutter_sf": _sf,
+                                "twr": _twr,
+                                "fin_span_in": round(_d["fin_span_in"], 2),
+                                "fin_thickness_in": _d["fin_thickness_in"],
+                                "motor_od_in": _entry["motor_od_in"],
+                                "total_impulse_ns": _entry.get("total_impulse_ns"),
+                                "_design": _d,
+                            })
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+        # Re-apply manufacturer filter to newly added options
+        if motor_pref:
+            if is_designation:
+                options = [o for o in options if motor_pref in o["designation"].lower()] or options
+            else:
+                options = [o for o in options if motor_pref in o["manufacturer"].lower()] or options
+        options.sort(key=lambda o: abs(o["predicted_altitude_ft"] - altitude_ft))
+
+    # 6. Generate .ork for best match
+    best = options[0] if options else None
+    ork_b64 = None
+    design_state = None
+    if best:
+        try:
+            ork_bytes = generate_ork(best["_design"], config)
+            ork_b64 = base64.b64encode(ork_bytes).decode()
+            design_state = _build_design_state(best["_design"], config)
+        except Exception:
+            pass
+
+    # 7. Strip internal _design from returned options
+    clean_options = [{k: v for k, v in o.items() if k != "_design"} for o in options]
+
+    message = _format_options_text(options, constraints) if options else "No valid options found."
+
+    return {
+        "message": message,
+        "motor_options": clean_options,
+        "design_state": design_state,
+        "ork_b64": ork_b64,
+        "resolved_constraints": {k: v for k, v in constraints.items() if not k.startswith("_")},
+    }
+
+
+async def generate_ork_for_motor(
+    motor_designation: str,
+    motor_options: list[dict],
+    constraints: dict,
+    config: dict,
+) -> dict:
+    """
+    Generate .ork for a specific motor from the already-ranked options list.
+    Called when user clicks a non-best motor option.
+    """
+    match = next((o for o in motor_options if o["designation"] == motor_designation), None)
+    if not match:
+        raise ValueError(f"Motor {motor_designation!r} not in options list")
+
+    # Rebuild design for this motor (constraints already resolved)
+    motor_meta = {
+        "designation":      match["designation"],
+        "manufacturer":     match["manufacturer"],
+        "impulse_class":    match["impulse_class"],
+        "motor_od_in":      match["motor_od_in"],
+        "motor_len_in":     None,   # will be resolved below
+        "prop_mass_kg":     None,
+        "avg_thrust_n":     None,
+        "total_impulse_ns": match.get("total_impulse_ns"),
+    }
+
+    # We need motor length — re-search for it
+    import httpx as _httpx
+    motor_dia_mm = round(match["motor_od_in"] * 25.4)
+    async with _httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            _THRUSTCURVE_SEARCH,
+            params={"commonName": motor_designation, "diameter": motor_dia_mm, "maxResults": 3},
+        )
+        for m in r.json().get("results", []):
+            if m.get("commonName") == motor_designation and m.get("length"):
+                motor_meta["motor_len_in"] = round(m["length"] / 25.4, 2)
+                motor_meta["prop_mass_kg"] = (m.get("propWeightG") or 0) / 1000
+                motor_meta["avg_thrust_n"] = m.get("avgThrustN")
+                break
+
+    if not motor_meta["motor_len_in"]:
+        raise ValueError(f"Cannot find length for {motor_designation}")
+
+    d = _build_design_for_motor(motor_meta, constraints, config)
+    ork_bytes = generate_ork(d, config)
+    return {
+        "ork_b64": base64.b64encode(ork_bytes).decode(),
+        "design_state": _build_design_state(d, config),
+    }

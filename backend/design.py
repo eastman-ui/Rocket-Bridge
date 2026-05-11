@@ -313,7 +313,7 @@ def _material(parent: ET.Element, density: float = FG_DENSITY, label: str = "Fib
     el.text = label
 
 
-def generate_ork(design: dict, config: dict) -> bytes:
+def generate_ork(design: dict, config: dict, extra_designs: list[dict] | None = None) -> bytes:
     """
     Generate a valid OpenRocket .ork ZIP from design parameters and flight config.
 
@@ -329,10 +329,15 @@ def generate_ork(design: dict, config: dict) -> bytes:
     config keys:
         recovery        — "dual" | "single"
         main_deploy_ft  — main chute deployment altitude in feet (default 700)
+
+    extra_designs: additional motor configs to embed (same airframe geometry,
+        different motor). Each becomes a named motorconfiguration in OR.
     """
     dual          = config.get("recovery", "dual") == "dual"
     main_deploy_m = config.get("main_deploy_ft", 700) * FT_TO_M
     conf_id       = _uid()
+    # Build (configid, design) pairs for all motor configs
+    all_configs = [(conf_id, design)] + [(_uid(), d) for d in (extra_designs or [])]
 
     # ── Auto-tune stability then validate fin flutter ─────────────────────────
     design = _tune_fin_span(design, target_min=1.0, target_max=1.3)
@@ -367,8 +372,15 @@ def generate_ork(design: dict, config: dict) -> bytes:
     _txt(rocket, "name", "RocketBridge Design")
     _txt(rocket, "id", _uid())
     _place(rocket, "absolute", "0.0")
-    mc = _sub(rocket, "motorconfiguration", configid=conf_id, default="true")
-    _sub(mc, "stage", number="0", active="true")
+    for i, (cid, d) in enumerate(all_configs):
+        attrs = {"configid": cid}
+        if i == 0:
+            attrs["default"] = "true"
+            attrs["name"] = d["motor_designation"]
+        else:
+            attrs["name"] = d["motor_designation"]
+        mc = _sub(rocket, "motorconfiguration", **attrs)
+        _sub(mc, "stage", number="0", active="true")
     _txt(rocket, "referencetype", "maximum")
 
     stage = _sub(_sub(rocket, "subcomponents"), "stage")
@@ -600,17 +612,19 @@ def generate_ork(design: dict, config: dict) -> bytes:
     _txt(mm, "ignitiondelay", "0.0")
     _txt(mm, "overhang", f"{NOZZLE_OVERHANG_M:.4f}")
 
-    motor_el = _sub(mm, "motor", configid=conf_id)
-    _txt(motor_el, "type", "reload")
-    _txt(motor_el, "manufacturer", design.get("motor_manufacturer", ""))
-    _txt(motor_el, "designation", design["motor_designation"])
-    _txt(motor_el, "diameter", f"{motor_od_m:.4f}")
-    _txt(motor_el, "length", f"{motor_len_m:.4f}")
-    _txt(motor_el, "delay", "0.0")
-
-    igconf = _sub(mm, "ignitionconfiguration", configid=conf_id)
-    _txt(igconf, "ignitionevent", "automatic")
-    _txt(igconf, "ignitiondelay", "0.0")
+    for cid, d in all_configs:
+        m_od_m  = d["motor_od_in"] * IN_TO_M
+        m_len_m = d["motor_length_in"] * IN_TO_M
+        mel = _sub(mm, "motor", configid=cid)
+        _txt(mel, "type", "reload")
+        _txt(mel, "manufacturer", d.get("motor_manufacturer", ""))
+        _txt(mel, "designation", d["motor_designation"])
+        _txt(mel, "diameter", f"{m_od_m:.4f}")
+        _txt(mel, "length", f"{m_len_m:.4f}")
+        _txt(mel, "delay", "0.0")
+        igconf = _sub(mm, "ignitionconfiguration", configid=cid)
+        _txt(igconf, "ignitionevent", "automatic")
+        _txt(igconf, "ignitiondelay", "0.0")
 
     # ── ZIP output ────────────────────────────────────────────────────────────
     xml_str = "<?xml version='1.0' encoding='utf-8'?>\n"
@@ -948,9 +962,9 @@ def _regex_parse_constraints(text: str, config: dict) -> dict:
         fin_count = int(m.group(1))
 
     # Fin thickness: require the thickness number to be adjacent to fin/thick keywords.
-    # Patterns: "1/4 inch thick fins", "0.25" fins", "fin thickness 3/16", "fins 0.125 thick"
+    # Patterns: "1/4 inch thick fins", "0.25" fins", ".125\" thick", "fin thickness 3/16"
     fin_thickness = None
-    _num = r'(\d+)\s*/\s*(\d+)|(\d+(?:\.\d+)?)'   # fraction OR decimal
+    _num = r'(\d+)\s*/\s*(\d+)|(\d*\.?\d+)'   # fraction OR decimal (allows .125 leading dot)
     _unit = r'(?:\s*(?:"|inch(?:es)?|in\b))?'
     # "[number][unit] thick[ness] fin" — thickness before fins
     _m = re.search(rf'(?:{_num}){_unit}\s*thick(?:ness)?\s*fins?', t)
@@ -1631,7 +1645,8 @@ async def analyze(messages: list[dict], config: dict, base_constraints: dict | N
     design_state = None
     if best:
         try:
-            ork_bytes = generate_ork(best["_design"], eff_config)
+            extra = [o["_design"] for o in options[1:] if "_design" in o]
+            ork_bytes = generate_ork(best["_design"], eff_config, extra_designs=extra)
             ork_b64 = base64.b64encode(ork_bytes).decode()
             design_state = _build_design_state(best["_design"], eff_config)
         except Exception:
@@ -1696,7 +1711,38 @@ async def generate_ork_for_motor(
         raise ValueError(f"Cannot find length for {motor_designation}")
 
     d = _build_design_for_motor(motor_meta, constraints, config)
-    ork_bytes = generate_ork(d, config)
+    # Embed all other options as secondary motor configs
+    extras = []
+    for o in motor_options:
+        if o["designation"] == motor_designation:
+            continue
+        try:
+            other_meta = {
+                "designation":   o["designation"],
+                "manufacturer":  o["manufacturer"],
+                "impulse_class": o["impulse_class"],
+                "motor_od_in":   o["motor_od_in"],
+                "motor_len_in":  None,
+                "prop_mass_kg":  None,
+                "avg_thrust_n":  None,
+                "total_impulse_ns": o.get("total_impulse_ns"),
+            }
+            other_dia_mm = round(o["motor_od_in"] * 25.4)
+            async with _httpx.AsyncClient(timeout=8) as _c:
+                _r = await _c.get(
+                    _THRUSTCURVE_SEARCH,
+                    params={"commonName": o["designation"], "diameter": other_dia_mm, "maxResults": 3},
+                )
+                for _m in _r.json().get("results", []):
+                    if _m.get("commonName") == o["designation"] and _m.get("length"):
+                        other_meta["motor_len_in"] = round(_m["length"] / 25.4, 2)
+                        other_meta["prop_mass_kg"] = (_m.get("propWeightG") or 0) / 1000
+                        break
+            if other_meta["motor_len_in"]:
+                extras.append(_build_design_for_motor(other_meta, constraints, config))
+        except Exception:
+            continue
+    ork_bytes = generate_ork(d, config, extra_designs=extras)
     return {
         "ork_b64": base64.b64encode(ork_bytes).decode(),
         "design_state": _build_design_state(d, config),

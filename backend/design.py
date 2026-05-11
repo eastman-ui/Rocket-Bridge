@@ -863,6 +863,7 @@ Schema (all nullable except altitude_target_ft):
   "min_diameter": <bool>,
   "fin_material": <"aluminum"|"fiberglass"|"carbon"|"plywood"|null>,
   "fin_count": <int|null>,
+  "fin_thickness_in": <float|null>,
   "altitude_target_ft": <float>,
   "motor_preference": <string|null>,
   "nose_length_in": <float|null>,
@@ -884,6 +885,8 @@ Rules:
 - "shorten forward section by 3" → fwd_bay_delta_in=-3.0
 - "14 inch nose" → nose_length_in=14.0  (absolute, not delta)
 - Use *_delta_in for relative changes, *_in for absolute values
+- "1/4 inch fins", "0.25\" thick", "quarter inch thick fins" → fin_thickness_in=0.25
+- "3/16 fins", "3/16 inch thick" → fin_thickness_in=0.1875
 """
 
 
@@ -931,6 +934,34 @@ def _regex_parse_constraints(text: str, config: dict) -> dict:
     m = re.search(r'(\d)\s*(?:-\s*)?fin', t)
     if m:
         fin_count = int(m.group(1))
+
+    # Fin thickness: require the thickness number to be adjacent to fin/thick keywords.
+    # Patterns: "1/4 inch thick fins", "0.25" fins", "fin thickness 3/16", "fins 0.125 thick"
+    fin_thickness = None
+    _num = r'(\d+)\s*/\s*(\d+)|(\d+(?:\.\d+)?)'   # fraction OR decimal
+    _unit = r'(?:\s*(?:"|inch(?:es)?|in\b))?'
+    # "[number][unit] thick[ness] fin" — thickness before fins
+    _m = re.search(rf'(?:{_num}){_unit}\s*thick(?:ness)?\s*fins?', t)
+    if _m:
+        fin_thickness = int(_m.group(1)) / int(_m.group(2)) if _m.group(1) else float(_m.group(3))
+    # "fin thickness [number]" or "fins? [number][unit] thick"
+    if fin_thickness is None:
+        _m = re.search(rf'fins?\s+(?:thickness\s*)?(?:{_num}){_unit}\s*(?:thick(?:ness)?)?', t)
+        if _m:
+            fin_thickness = int(_m.group(1)) / int(_m.group(2)) if _m.group(1) else float(_m.group(3))
+    # "fin thickness" heading then number
+    if fin_thickness is None:
+        _m = re.search(rf'fin\s+thickness[:\s]+(?:{_num})', t)
+        if _m:
+            fin_thickness = int(_m.group(1)) / int(_m.group(2)) if _m.group(1) else float(_m.group(3))
+    # Fraction words near fins
+    if fin_thickness is None and re.search(r'quarter\s*(?:inch\s*)?(?:thick\s*)?fins?|fins?\s*quarter', t):
+        fin_thickness = 0.25
+    if fin_thickness is None and re.search(r'eighth\s*(?:inch\s*)?(?:thick\s*)?fins?|fins?\s*eighth', t):
+        fin_thickness = 0.125
+    # Sanity clamp: fins must be 1/16" – 1/2"
+    if fin_thickness is not None:
+        fin_thickness = max(0.0625, min(0.5, round(fin_thickness, 4)))
 
     # Altitude from message (e.g. "15k ft", "10,000 feet", "15000")
     alt_ft = config.get("altitude_target_ft", 15000)
@@ -1005,6 +1036,7 @@ def _regex_parse_constraints(text: str, config: dict) -> dict:
         "min_diameter":           min_dia,
         "fin_material":           fin_material,
         "fin_count":              fin_count,
+        "fin_thickness_in":       fin_thickness,
         "altitude_target_ft":     alt_ft,
         "motor_preference":       motor_pref,
         "nose_length_in":         geo.get("nose_length_in"),
@@ -1250,7 +1282,9 @@ def _build_design_for_motor(motor: dict, constraints: dict, config: dict) -> dic
     root_in  = round(tube_od_in * 1.8, 2)
     tip_in   = round(root_in * 0.35, 2)
     sweep_in = round(root_in * 0.45, 2)
-    thick_in = 0.25 if fin_material == "aluminum" else 0.125
+    # User-specified thickness takes priority; fall back to material default
+    user_thick = constraints.get("fin_thickness_in")
+    thick_in = user_thick if user_thick else (0.25 if fin_material == "aluminum" else 0.125)
 
     d = {
         "tube_od_in":             tube_od_in,
@@ -1280,17 +1314,19 @@ def _build_design_for_motor(motor: dict, constraints: dict, config: dict) -> dic
     # Tune fin span for stability
     d = _tune_fin_span(d, target_min=1.0, target_max=1.3)
 
-    # Validate flutter with material-correct G
+    # Validate flutter with material-correct G.
+    # Only auto-increase thickness if user did not pin a specific value.
     G = FIN_SHEAR_MODULUS.get(fin_material, 2.62e9)
-    sf = _flutter_sf_g(d, altitude_ft, G)
-    target_sf = 1.2
-    if sf < target_sf:
-        for _ in range(8):
-            d["fin_thickness_in"] = round(d["fin_thickness_in"] + 0.0625, 4)
-            if d["fin_thickness_in"] > 0.5:
-                break
-            if _flutter_sf_g(d, altitude_ft, G) >= target_sf:
-                break
+    if not user_thick:
+        sf = _flutter_sf_g(d, altitude_ft, G)
+        target_sf = 1.2
+        if sf < target_sf:
+            for _ in range(8):
+                d["fin_thickness_in"] = round(d["fin_thickness_in"] + 0.0625, 4)
+                if d["fin_thickness_in"] > 0.5:
+                    break
+                if _flutter_sf_g(d, altitude_ft, G) >= target_sf:
+                    break
 
     return d
 

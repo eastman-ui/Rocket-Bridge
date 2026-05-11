@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 import design as design_module
 
 from converter import convert_ork, get_stored_results, validate_ork
+from ork_editor import parse_ork_to_tree
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
 from sweep import run_sweep
@@ -737,3 +738,17 @@ async def design_select_motor(req: _SelectMotorRequest):
         design_state=ds,
         ork_b64=result["ork_b64"],
     )
+
+
+# ─── ORK Design Editor ──────────────────────────────────────────────────────
+
+@app.post("/api/design/parse-ork")
+async def parse_ork_endpoint(file: UploadFile):
+    if not file.filename or not file.filename.endswith(".ork"):
+        raise HTTPException(status_code=400, detail="File must be .ork")
+    ork_bytes = await file.read()
+    try:
+        tree = await asyncio.to_thread(parse_ork_to_tree, ork_bytes)
+        return tree
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to parse .ork: {e}")

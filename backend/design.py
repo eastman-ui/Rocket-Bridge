@@ -16,6 +16,7 @@ Component tree (nose→tail):
 import base64
 import io
 import json
+import math
 import os
 import re
 import uuid
@@ -30,6 +31,148 @@ NOZZLE_OVERHANG_M = 0.0254    # 1" motor nozzle overhang
 DROGUE_SPACE_M    = 0.15      # 6" min space between coupler extension and motor
 CR_THICK_M        = 0.006     # 6mm centering ring thickness
 BH_THICK_M        = 0.005     # 5mm bulkhead thickness
+
+
+# ── Stability calculation ─────────────────────────────────────────────────────
+
+def _section_lengths(d: dict) -> tuple[float, float, float, float]:
+    """Return (nose, fwd, switch, aft) lengths in metres."""
+    ebay_len_m   = d.get("avionics_bay_length_in", 9.0) * IN_TO_M
+    coupler_ext  = (ebay_len_m - SWITCH_BAND_LEN_M) / 2
+    motor_len_m  = d["motor_length_in"] * IN_TO_M
+    aft_len_m    = coupler_ext + DROGUE_SPACE_M + motor_len_m + NOZZLE_OVERHANG_M
+    return (
+        d["nose_length_in"] * IN_TO_M,
+        d["fwd_bay_length_in"] * IN_TO_M,
+        SWITCH_BAND_LEN_M,
+        aft_len_m,
+    )
+
+
+def _barrowman_cp_m(d: dict) -> float:
+    """Barrowman CP from nose tip, metres. Uses tangent-ogive nose + trapezoidal fin set."""
+    tube_od_m = d["tube_od_in"] * IN_TO_M
+    r_body    = tube_od_m / 2
+
+    L_nose, fwd_len, sw_len, aft_len = _section_lengths(d)
+
+    # Nose cone — tangent ogive: CNα=2, XCP = 2/3 * L_nose
+    cn_nose  = 2.0
+    xcp_nose = (2 / 3) * L_nose
+
+    # Fins — Barrowman trapezoidal, N fins
+    s   = d["fin_span_in"]      * IN_TO_M   # exposed semi-span (body surface to tip)
+    Cr  = d["fin_root_in"]      * IN_TO_M
+    Ct  = d["fin_tip_in"]       * IN_TO_M
+    m_t = d["fin_sweep_in"]     * IN_TO_M   # LE sweep (root LE to tip LE, along body axis)
+    N   = d["fin_count"]
+
+    # CNα for fin set (Barrowman 1966)
+    cn_fins = (4 * N * (s / tube_od_m) ** 2) / (1 + math.sqrt(1 + (2 * s / (Cr + Ct)) ** 2))
+    # Body-fin interference correction
+    cn_fins *= 1 + r_body / (s + r_body)
+
+    # CP of fin set from fin root leading edge (Barrowman eq.)
+    # For rectangular fin (Cr=Ct, m=0) this gives Cr/4. For delta this gives Cr/2. Verified.
+    delta_xcp = (m_t * (Cr + 2 * Ct)) / (3 * (Cr + Ct)) + \
+                (1 / 6) * ((Cr + Ct) - (Cr * Ct) / (Cr + Ct))
+
+    # Fin root LE is at: nose + fwd + switch + (aft_len - root_chord)
+    x_fin_root_le = L_nose + fwd_len + sw_len + (aft_len - Cr)
+    xcp_fins = x_fin_root_le + delta_xcp
+
+    # Combined CP
+    cn_total = cn_nose + cn_fins
+    return (cn_nose * xcp_nose + cn_fins * xcp_fins) / cn_total
+
+
+def _estimate_cg_m(d: dict) -> float:
+    """Simplified CG from nose tip, metres. Masses: tubes, avionics, motor estimate."""
+    tube_od_m = d["tube_od_in"] * IN_TO_M
+    tube_r    = tube_od_m / 2
+    wall_m    = d["wall_in"] * IN_TO_M
+    tube_ir   = tube_r - wall_m
+
+    ebay_len_m  = d.get("avionics_bay_length_in", 9.0) * IN_TO_M
+    coupler_ext = (ebay_len_m - SWITCH_BAND_LEN_M) / 2
+    motor_len_m = d["motor_length_in"] * IN_TO_M
+    motor_r     = d["motor_od_in"] * IN_TO_M / 2
+
+    L_nose, fwd_len, sw_len, aft_len = _section_lengths(d)
+
+    # Fiberglass tube cross-section area
+    tube_area = math.pi * (tube_r ** 2 - tube_ir ** 2)
+
+    x_nose_start = 0.0
+    x_fwd_start  = L_nose
+    x_sw_start   = x_fwd_start + fwd_len
+    x_aft_start  = x_sw_start  + sw_len
+
+    # Components: (mass_kg, cg_from_nose_m)
+    components: list[tuple[float, float]] = [
+        # Nose (hollow ogive shell ≈ half-cylinder equivalent)
+        (FG_DENSITY * tube_area * L_nose * 0.5,  x_nose_start + L_nose * 0.45),
+        # Forward section tube
+        (FG_DENSITY * tube_area * fwd_len,         x_fwd_start + fwd_len / 2),
+        # Switch band tube
+        (FG_DENSITY * tube_area * sw_len,           x_sw_start  + sw_len / 2),
+        # Avionics coupler (centered on switch band)
+        (FG_DENSITY * math.pi * ((tube_ir - 0.001) ** 2 - (tube_ir - 0.001 - wall_m) ** 2) * ebay_len_m,
+         x_sw_start - coupler_ext + ebay_len_m / 2),
+        # Avionics electronics mass (at switch band)
+        (d.get("avionics_mass_kg", 0.15),           x_sw_start + sw_len / 2),
+        # Aft section tube
+        (FG_DENSITY * tube_area * aft_len,          x_aft_start + aft_len / 2),
+        # Fins (trapezoidal, fiberglass)
+        (FG_DENSITY * d["fin_thickness_in"] * IN_TO_M *
+         (d["fin_root_in"] + d["fin_tip_in"]) / 2 * IN_TO_M *
+         d["fin_span_in"] * IN_TO_M * d["fin_count"],
+         x_aft_start + aft_len - d["fin_root_in"] * IN_TO_M * 0.6),
+        # Motor (full — on pad). Nozzle protrudes NOZZLE_OVERHANG_M past aft section end,
+        # so motor aft face = aft_section_end + overhang (not minus).
+        (d.get("motor_total_mass_kg") or 900 * math.pi * motor_r ** 2 * motor_len_m,
+         x_aft_start + aft_len + NOZZLE_OVERHANG_M - motor_len_m / 2),
+    ]
+
+    total_mass = sum(m for m, _ in components)
+    return sum(m * x for m, x in components) / total_mass
+
+
+def _static_margin_cal(d: dict) -> float:
+    """Static margin in calibers (on pad, motor full)."""
+    cp  = _barrowman_cp_m(d)
+    cg  = _estimate_cg_m(d)
+    return (cp - cg) / (d["tube_od_in"] * IN_TO_M)
+
+
+def _tune_fin_span(d: dict, target_min: float = 1.0, target_max: float = 1.5) -> dict:
+    """
+    Return a copy of d with fin_span_in adjusted so static margin falls in
+    [target_min, target_max] calibers. Steps 0.1" from 0.5" upward.
+    If no single span hits the window, returns the span closest to target midpoint.
+    """
+    target_mid = (target_min + target_max) / 2
+    d = dict(d)
+    best_span, best_err = d["fin_span_in"], float("inf")
+
+    tube_od_in = d["tube_od_in"]
+    min_span = max(0.5, tube_od_in * 0.5)       # structural floor: ≥ half tube OD
+
+    for span_tenths in range(int(min_span * 10), 121):  # min_span … 12.0"
+        span = span_tenths / 10.0
+        d["fin_span_in"] = span
+        try:
+            margin = _static_margin_cal(d)
+        except Exception:
+            continue
+        if target_min <= margin <= target_max:
+            return d                             # first hit inside window — done
+        err = abs(margin - target_mid)
+        if err < best_err:
+            best_err, best_span = err, span
+
+    d["fin_span_in"] = best_span
+    return d
 
 
 def _uid() -> str:
@@ -82,6 +225,9 @@ def generate_ork(design: dict, config: dict) -> bytes:
     dual          = config.get("recovery", "dual") == "dual"
     main_deploy_m = config.get("main_deploy_ft", 700) * FT_TO_M
     conf_id       = _uid()
+
+    # ── Auto-tune fin span to ~1.0–1.3 cal (rail departure stability) ────────
+    design = _tune_fin_span(design, target_min=1.0, target_max=1.3)
 
     # ── Geometry ────────────────────────────────────────────────────────────
     tube_od_m  = design["tube_od_in"] * IN_TO_M
@@ -378,13 +524,29 @@ Ask clarifying questions one at a time until you have enough to produce a comple
 design, then output a <DESIGN> JSON block.
 
 Design constraints:
-- Static margin: 1.0–1.5 calibers
+- Static margin: ~1.0 caliber at rail departure (10-ft standard rail)
 - Thrust-to-weight: > 5:1 at liftoff
-- Off-rod velocity: > 40 ft/s (12 m/s)
+- Off-rod velocity: > 40 ft/s (12 m/s) — verify against rail length
 - Main descent rate: 10–20 ft/s (target 15)
 - Drogue descent rate: 40–60 ft/s
 - Nose cone fineness ratio: 3:1–4:1 (length:base-diameter)
 - Body tube L:D: 12:1–16:1 (sum of all three sections)
+
+Use standard airframe tube sizes from real manufacturers (LOC, Madcow, Wildman, Apogee):
+  | Diameter | OD (in)  | Wall (in) | Manufacturer examples        |
+  |----------|----------|-----------|-----------------------------|
+  | 29mm     | 1.225    | 0.058     | LOC, Apogee                 |
+  | 38mm     | 1.635    | 0.058     | LOC, Apogee                 |
+  | 54mm     | 2.26     | 0.065     | LOC, Wildman G12            |
+  | 54mm     | 2.152    | 0.054     | Madcow                      |
+  | 75mm     | 3.00     | 0.082     | LOC                         |
+  | 75mm     | 3.15     | 0.065     | Wildman G12                 |
+  | 98mm     | 3.90     | 0.082     | LOC                         |
+  | 98mm     | 4.00     | 0.065     | Wildman G12                 |
+  | 4-inch   | 4.024    | 0.093     | Madcow                      |
+  | 6-inch   | 6.007    | 0.125     | Madcow                      |
+
+Nose cone length: aim for 3–4× tube OD (e.g. 54mm → 7–10" nose).
 
 Body structure (nose-to-tail):
   1. Forward Section (fwd_bay_length_in) — main parachute bay
@@ -395,27 +557,9 @@ Avionics coupler (avionics_bay_length_in): the ebay tube that slides inside the
 airframe spanning the switch band. Typical 8–12". Half extends into the forward
 section, half into the aft section. Fwd and aft bulkheads seal the electronics bay.
 
-Fin sizing — use these Barrowman-calibrated rules (validated against real OR files):
-
-  Min-diameter (motor OD within 3mm of tube ID):
-    span      = 1.6 × tube_od_in  (e.g. 54mm / 2.13" tube → 3.4–3.6" span)
-    root      = 2.0 × span
-    tip       = 0.36 × root
-    sweep     = 0.29 × root
-    count     = 4
-    thickness = 0.125"
-
-  Standard diameter (centering rings needed):
-    span      = 1.0 × tube_od_in
-    root      = 2.0 × span
-    tip       = 0.36 × root
-    sweep     = 0.29 × root
-    count     = 3 or 4
-    thickness = 0.125"
-
-  Critical rule: longer rockets need LESS fin area, not more. A min-diameter
-  54mm M-motor rocket (L:D ≈ 37:1) achieves 1.2 cal with only 3.5" span.
-  Resist the urge to use 5–6" span on long airframes — it will be over-stable.
+Fin sizing: the backend auto-tunes fin_span_in using Barrowman equations to hit
+the stability target. Supply plausible starting geometry; exact span doesn't matter.
+Root ≈ 2× span, tip ≈ 0.35× root, sweep ≈ 0.29× root, count = 4, thickness = 0.125".
 
 User config: altitude target {altitude_target_ft} ft, recovery: {recovery},
 main deploy: {main_deploy_ft} ft, drogue: {drogue_deploy}.
@@ -425,6 +569,7 @@ When ready, output exactly:
 {{
   "tube_od_in": <float>,
   "wall_in": <float>,
+  "tube_manufacturer": <"LOC"|"Madcow"|"Wildman"|"Apogee"|"custom">,
   "nose_shape": <"ogive"|"conical"|"elliptical"|"vonkarman"|"parabolic">,
   "nose_length_in": <float>,
   "fwd_bay_length_in": <float>,
@@ -439,6 +584,7 @@ When ready, output exactly:
   "motor_manufacturer": <string>,
   "motor_od_in": <float>,
   "motor_length_in": <float>,
+  "motor_total_mass_kg": <float>,
   "drogue_dia_in": <float>,
   "main_dia_in": <float>,
   "avionics_mass_kg": <float>,
@@ -453,17 +599,22 @@ _DESIGN_RE = re.compile(r"<DESIGN>(.*?)</DESIGN>", re.DOTALL)
 
 
 def _build_design_state(d: dict) -> dict:
+    tuned = _tune_fin_span(d, target_min=1.0, target_max=1.3)
+    try:
+        margin = round(_static_margin_cal(tuned), 2)
+    except Exception:
+        margin = None
     return {
         "tube_od_in": d.get("tube_od_in"),
         "fwd_bay_length_in": d.get("fwd_bay_length_in"),
         "avionics_bay_length_in": d.get("avionics_bay_length_in"),
         "wall_in": d.get("wall_in"),
         "nose_shape": d.get("nose_shape"),
-        "fin_count": d.get("fin_count"),
-        "fin_root_in": d.get("fin_root_in"),
-        "fin_span_in": d.get("fin_span_in"),
+        "fin_count": tuned.get("fin_count"),
+        "fin_root_in": tuned.get("fin_root_in"),
+        "fin_span_in": tuned.get("fin_span_in"),
         "motor_designation": d.get("motor_designation"),
-        "est_margin_cal": None,
+        "est_margin_cal": margin,
         "est_altitude_ft": None,
     }
 

@@ -386,7 +386,7 @@ export default function App() {
       </div>
 
       <div className={activePage !== 'design' ? 'hidden' : ''}>
-        <DesignPage setSelectedFile={setSelectedFile} setActivePage={setActivePage} />
+        <DesignPage setSelectedFile={setSelectedFile} setActivePage={setActivePage as (page: string) => void} />
       </div>
 
       <main className={`max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1 ${activePage !== 'main' ? 'hidden' : ''}`}>

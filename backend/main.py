@@ -743,7 +743,7 @@ async def design_select_motor(req: _SelectMotorRequest):
 
 # ─── ORK Design Editor ──────────────────────────────────────────────────────
 
-@app.post("/api/design/parse-ork")
+@app.post("/design/parse-ork")
 async def parse_ork_endpoint(file: UploadFile):
     if not file.filename or not file.filename.endswith(".ork"):
         raise HTTPException(status_code=400, detail="File must be .ork")
@@ -755,7 +755,7 @@ async def parse_ork_endpoint(file: UploadFile):
         raise HTTPException(status_code=422, detail=f"Failed to parse .ork: {e}")
 
 
-@app.post("/api/design/write-ork")
+@app.post("/design/write-ork")
 async def write_ork_endpoint(request: Request):
     body = await request.json()
     tree = body.get("tree")

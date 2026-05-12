@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 import design as design_module
 
 from converter import convert_ork, get_stored_results, validate_ork
-from ork_editor import parse_ork_to_tree, write_tree_to_ork
+from ork_editor import parse_ork_to_tree, write_tree_to_ork, add_component_to_ork, remove_component_from_ork
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
 from sweep import run_sweep
@@ -759,7 +759,7 @@ async def parse_ork_endpoint(file: UploadFile):
 async def write_ork_endpoint(request: Request):
     body = await request.json()
     tree = body.get("tree")
-    ork_b64 = body.get("ork_b64")  # base64 of original .ork
+    ork_b64 = body.get("ork_b64")
     if not tree or not ork_b64:
         raise HTTPException(status_code=400, detail="tree and ork_b64 required")
     original_bytes = base64.b64decode(ork_b64)
@@ -768,3 +768,36 @@ async def write_ork_endpoint(request: Request):
         return {"ork_b64": base64.b64encode(new_ork_bytes).decode("ascii")}
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Failed to write .ork: {e}")
+
+
+@app.post("/design/add-component")
+async def add_component_endpoint(request: Request):
+    body = await request.json()
+    parent_id = body.get("parent_id")
+    component = body.get("component")
+    ork_b64 = body.get("ork_b64")
+    if not parent_id or not component or not ork_b64:
+        raise HTTPException(status_code=400, detail="parent_id, component, and ork_b64 required")
+    original_bytes = base64.b64decode(ork_b64)
+    try:
+        new_ork_bytes = await asyncio.to_thread(add_component_to_ork, parent_id, component, original_bytes)
+        tree = await asyncio.to_thread(parse_ork_to_tree, new_ork_bytes)
+        return {"ork_b64": base64.b64encode(new_ork_bytes).decode("ascii"), "tree": tree}
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to add component: {e}")
+
+
+@app.post("/design/remove-component")
+async def remove_component_endpoint(request: Request):
+    body = await request.json()
+    comp_id = body.get("comp_id")
+    ork_b64 = body.get("ork_b64")
+    if not comp_id or not ork_b64:
+        raise HTTPException(status_code=400, detail="comp_id and ork_b64 required")
+    original_bytes = base64.b64decode(ork_b64)
+    try:
+        new_ork_bytes = await asyncio.to_thread(remove_component_from_ork, comp_id, original_bytes)
+        tree = await asyncio.to_thread(parse_ork_to_tree, new_ork_bytes)
+        return {"ork_b64": base64.b64encode(new_ork_bytes).decode("ascii"), "tree": tree}
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to remove component: {e}")

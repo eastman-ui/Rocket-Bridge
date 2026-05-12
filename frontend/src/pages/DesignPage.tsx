@@ -87,6 +87,45 @@ interface OrkTree {
   components: OrkComponent[];
 }
 
+interface MotorSearchResult {
+  id: string;
+  designation: string;
+  manufacturer: string;
+  impulse_class: string;
+  avg_thrust_n: number | null;
+  total_impulse_ns: number | null;
+  diameter_mm: number | null;
+  length_mm: number | null;
+}
+
+interface CanvasPos {
+  comp: OrkComponent;
+  x: number;
+  endX: number;
+  topY: number;
+  bottomY: number;
+  len: number;
+}
+
+const TUBE_MATERIALS = [
+  { name: 'Cardboard', type: 'bulk', density: 700 },
+  { name: 'Phenolic', type: 'bulk', density: 1300 },
+  { name: 'Fiberglass', type: 'bulk', density: 1820 },
+  { name: 'Carbon Fiber', type: 'bulk', density: 1550 },
+  { name: 'Aluminum 6061', type: 'bulk', density: 2700 },
+];
+
+const FIN_MATERIALS = [
+  { name: 'Balsa', type: 'bulk', density: 120 },
+  { name: 'Plywood', type: 'bulk', density: 600 },
+  { name: 'Fiberglass', type: 'bulk', density: 1820 },
+  { name: 'Carbon Fiber', type: 'bulk', density: 1550 },
+  { name: 'Aluminum 6061', type: 'bulk', density: 2700 },
+];
+
+const TUBE_COMP_TYPES = new Set(['nosecone', 'bodytube', 'tubecoupler', 'innertube', 'bulkhead', 'centeringring', 'engineblock']);
+const FIN_COMP_TYPES = new Set(['trapezoidfinset', 'freeformfinset']);
+
 // ── Shared ──────────────────────────────────────────────────────────────────
 
 interface DesignPageProps {
@@ -551,6 +590,250 @@ function updateComponent(tree: OrkTree, id: string, updates: Partial<OrkComponen
   return { ...tree, components: walk(tree.components) };
 }
 
+function makeDefaultComponent(type: string): OrkComponent {
+  const id = `comp_${Math.random().toString(36).slice(2, 10)}`;
+  const pos = { method: 'top', offset: 0, position_type: 'top', position_value: 0 };
+  const defaults: Record<string, Partial<OrkComponent>> = {
+    trapezoidfinset: {
+      type, name: 'Fin Set', fincount: 4,
+      rootchord: 0.15, tipchord: 0.06, span: 0.1, sweep: 0.05,
+      thickness: 0.003, cant: 0, crosssection: 'flat',
+      position: { ...pos, method: 'bottom', position_type: 'bottom' },
+    },
+    freeformfinset: {
+      type, name: 'Freeform Fin Set', fincount: 4,
+      thickness: 0.003, cant: 0, crosssection: 'flat',
+      finpoints: [
+        { x: 0, y: 0 }, { x: 0.15, y: 0 }, { x: 0.09, y: 0.1 }, { x: 0, y: 0.1 },
+      ],
+      position: { ...pos, method: 'bottom', position_type: 'bottom' },
+    },
+    parachute: {
+      type, name: 'Parachute', diameter: 0.6, cd: 0.8,
+      deployevent: 'apogee', linecount: 6, linelength: 0.6, position: pos,
+    },
+    masscomponent: {
+      type, name: 'Mass Component', mass: 0.05,
+      packedlength: 0.05, packedradius: 0.02, position: pos,
+    },
+    shockcord: { type, name: 'Shock Cord', cordlength: 5.0, position: pos },
+    bulkhead: { type, name: 'Bulkhead', length: 0.003, outerradius: 0.075, position: pos },
+    centeringring: {
+      type, name: 'Centering Ring', length: 0.003,
+      outerradius: 0.075, innerradius: 0.029, position: pos,
+    },
+    innertube: {
+      type, name: 'Motor Mount Tube', length: 0.3,
+      outerradius: 0.029, thickness: 0.001, position: pos,
+    },
+    railbutton: { type, name: 'Rail Button', outerdiameter: 0.018, innerdiameter: 0.008, height: 0.02, position: pos },
+  };
+  return { id, children: [], ...(defaults[type] ?? { type, name: 'Component', position: pos }) } as OrkComponent;
+}
+
+// ── Freeform fin SVG point editor ──────────────────────────────────────────
+
+function FreeformFinEditor({ comp, onChange }: { comp: OrkComponent; onChange: (u: Partial<OrkComponent>) => void }) {
+  const pts = (comp.finpoints as { x: number; y: number }[]) ?? [];
+  const dragIdxRef = useRef<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  if (pts.length === 0) {
+    return (
+      <div className="text-[10px] text-gray-600 italic">No fin points defined.</div>
+    );
+  }
+
+  const W = 260; const H = 150; const PAD = 18;
+  const maxX = Math.max(...pts.map(p => p.x), 0.01);
+  const maxY = Math.max(...pts.map(p => p.y), 0.01);
+  const scale = Math.min((W - 2 * PAD) / maxX, (H - 2 * PAD) / maxY);
+
+  const toSvg = (p: { x: number; y: number }) => ({
+    x: PAD + p.x * scale,
+    y: H - PAD - p.y * scale,
+  });
+
+  const fromSvg = (sx: number, sy: number) => ({
+    x: Math.max(0, (sx - PAD) / scale),
+    y: Math.max(0, (H - PAD - sy) / scale),
+  });
+
+  const pathD = pts.map((p, i) => {
+    const sp = toSvg(p);
+    return `${i === 0 ? 'M' : 'L'} ${sp.x.toFixed(1)} ${sp.y.toFixed(1)}`;
+  }).join(' ') + ' Z';
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (dragIdxRef.current === null) return;
+    const rect = svgRef.current!.getBoundingClientRect();
+    const newPt = fromSvg(e.clientX - rect.left, e.clientY - rect.top);
+    const newPts = [...pts];
+    newPts[dragIdxRef.current] = newPt;
+    onChange({ finpoints: newPts });
+  };
+
+  const stopDrag = () => { dragIdxRef.current = null; };
+
+  return (
+    <div className="space-y-1.5">
+      <svg ref={svgRef} width={W} height={H}
+        className="bg-gray-900/60 border border-gray-800 rounded select-none"
+        onMouseMove={handleMouseMove}
+        onMouseUp={stopDrag}
+        onMouseLeave={stopDrag}>
+        {/* Axes */}
+        <line x1={PAD} y1={H - PAD} x2={W - PAD / 2} y2={H - PAD} stroke="#374151" strokeWidth="1" />
+        <line x1={PAD} y1={PAD / 2} x2={PAD} y2={H - PAD} stroke="#374151" strokeWidth="1" />
+        <text x={W - PAD / 2 + 2} y={H - PAD + 4} fontSize="8" fill="#6b7280">x</text>
+        <text x={PAD - 4} y={PAD / 2 - 2} fontSize="8" fill="#6b7280">y</text>
+        {/* Fin shape */}
+        <path d={pathD} fill="#3b82f630" stroke="#60a5fa" strokeWidth="1.5" />
+        {/* Drag points */}
+        {pts.map((p, i) => {
+          const sp = toSvg(p);
+          return (
+            <g key={i}>
+              <circle cx={sp.x} cy={sp.y} r={7} fill="transparent"
+                style={{ cursor: 'grab' }}
+                onMouseDown={e => { e.preventDefault(); dragIdxRef.current = i; }} />
+              <circle cx={sp.x} cy={sp.y} r={4} fill="#3b82f6" stroke="#93c5fd" strokeWidth="1.5"
+                style={{ cursor: 'grab', pointerEvents: 'none' }} />
+              <text x={sp.x + 5} y={sp.y - 4} fontSize="7" fill="#6b7280">
+                {i}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="flex gap-1 flex-wrap">
+        <button onClick={() => {
+          const last = pts[pts.length - 2] ?? { x: 0.05, y: 0 };
+          const newPts = [...pts.slice(0, -1), { x: last.x + 0.02, y: last.y + 0.02 }, pts[pts.length - 1]];
+          onChange({ finpoints: newPts });
+        }} className="text-[10px] bg-gray-800 hover:bg-gray-700 text-gray-400 px-2 py-0.5 rounded">
+          + Point
+        </button>
+        {pts.length > 3 && (
+          <button onClick={() => {
+            const newPts = [...pts.slice(0, -2), pts[pts.length - 1]];
+            onChange({ finpoints: newPts });
+          }} className="text-[10px] bg-gray-800 hover:bg-gray-700 text-gray-400 px-2 py-0.5 rounded">
+            − Point
+          </button>
+        )}
+        <span className="text-[10px] text-gray-700 self-center ml-auto">drag points to reshape</span>
+      </div>
+      {/* Point coordinate table */}
+      <div className="space-y-0.5 max-h-24 overflow-y-auto">
+        {pts.map((p, i) => (
+          <div key={i} className="flex items-center gap-1.5 text-[10px]">
+            <span className="text-gray-600 w-4">{i}</span>
+            <label className="flex items-center gap-1">
+              <span className="text-gray-500">x</span>
+              <input type="number" step="0.001"
+                value={(p.x * M_TO_MM).toFixed(1)}
+                onChange={e => {
+                  const newPts = [...pts];
+                  newPts[i] = { ...p, x: parseFloat(e.target.value) / M_TO_MM || 0 };
+                  onChange({ finpoints: newPts });
+                }}
+                className="w-16 bg-gray-900 border border-gray-800 rounded px-1 py-0.5 text-white" />
+              <span className="text-gray-600">mm</span>
+            </label>
+            <label className="flex items-center gap-1">
+              <span className="text-gray-500">y</span>
+              <input type="number" step="0.001"
+                value={(p.y * M_TO_MM).toFixed(1)}
+                onChange={e => {
+                  const newPts = [...pts];
+                  newPts[i] = { ...p, y: parseFloat(e.target.value) / M_TO_MM || 0 };
+                  onChange({ finpoints: newPts });
+                }}
+                className="w-16 bg-gray-900 border border-gray-800 rounded px-1 py-0.5 text-white" />
+              <span className="text-gray-600">mm</span>
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Trapezoid fin SVG diagram ───────────────────────────────────────────────
+
+function TrapezoidFinDiagram({ comp }: { comp: OrkComponent }) {
+  const root = ((comp.rootchord as number) ?? 0.15) * M_TO_MM;
+  const tip = ((comp.tipchord as number) ?? 0.06) * M_TO_MM;
+  const span = ((comp.span as number) ?? 0.1) * M_TO_MM;
+  const sweep = ((comp.sweep as number) ?? 0.05) * M_TO_MM;
+
+  const W = 220; const H = 120; const PAD = 20;
+  const maxDim = Math.max(root, tip + sweep, span, 1);
+  const scale = Math.min((W - 2 * PAD) / maxDim, (H - 2 * PAD) / maxDim);
+
+  // Root at bottom, tip at top (span direction = up)
+  const rx0 = PAD; const rx1 = PAD + root * scale;
+  const ty0 = PAD + sweep * scale; const ty1 = PAD + (sweep + tip) * scale;
+  const bottomY = PAD + span * scale;
+
+  const pathD = `M ${rx0} ${bottomY} L ${rx1} ${bottomY} L ${ty1} ${PAD} L ${ty0} ${PAD} Z`;
+
+  return (
+    <svg width={W} height={H} className="bg-gray-900/40 border border-gray-800 rounded">
+      <path d={pathD} fill="#3b82f620" stroke="#60a5fa" strokeWidth="1.5" />
+      {/* Root chord label */}
+      <line x1={rx0} y1={bottomY + 6} x2={rx1} y2={bottomY + 6} stroke="#6b7280" strokeWidth="1" markerEnd="url(#arrow)" />
+      <text x={(rx0 + rx1) / 2} y={bottomY + 14} textAnchor="middle" fontSize="8" fill="#6b7280">root {root.toFixed(0)}</text>
+      {/* Span label */}
+      <line x1={rx0 - 6} y1={PAD} x2={rx0 - 6} y2={bottomY} stroke="#6b7280" strokeWidth="1" />
+      <text x={rx0 - 8} y={(PAD + bottomY) / 2} textAnchor="end" fontSize="8" fill="#6b7280">{span.toFixed(0)}</text>
+      {/* Tip chord label */}
+      <line x1={ty0} y1={PAD - 6} x2={ty1} y2={PAD - 6} stroke="#6b7280" strokeWidth="1" />
+      <text x={(ty0 + ty1) / 2} y={PAD - 8} textAnchor="middle" fontSize="8" fill="#6b7280">tip {tip.toFixed(0)}</text>
+    </svg>
+  );
+}
+
+// ── Add component panel ─────────────────────────────────────────────────────
+
+const ADDABLE_TYPES = [
+  { type: 'trapezoidfinset', label: 'Trapezoid Fin Set' },
+  { type: 'freeformfinset', label: 'Freeform Fin Set' },
+  { type: 'parachute', label: 'Parachute' },
+  { type: 'masscomponent', label: 'Mass Component' },
+  { type: 'shockcord', label: 'Shock Cord' },
+  { type: 'bulkhead', label: 'Bulkhead' },
+  { type: 'centeringring', label: 'Centering Ring' },
+  { type: 'innertube', label: 'Inner Tube' },
+  { type: 'railbutton', label: 'Rail Button' },
+];
+
+function AddComponentPanel({ onAdd }: { onAdd: (type: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="space-y-1">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 border border-dashed border-gray-700 hover:border-gray-500 rounded px-2 py-1.5 transition-colors">
+        <span className="text-sm leading-none">+</span>
+        <span>Add Child Component</span>
+      </button>
+      {open && (
+        <div className="border border-gray-700 rounded bg-gray-950 divide-y divide-gray-800">
+          {ADDABLE_TYPES.map(({ type, label }) => (
+            <button key={type}
+              onClick={() => { onAdd(type); setOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white transition-colors flex items-center gap-2">
+              <span>{TYPE_ICON[type] ?? '·'}</span>
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Component tree sidebar
 function ComponentTree({
   components, selectedId, onSelect, depth,
@@ -577,9 +860,18 @@ function ComponentTree({
   );
 }
 
-// 2D rocket profile canvas
-function RocketCanvas({ tree, selectedId }: { tree: OrkTree; selectedId: string | null }) {
+// 2D rocket profile canvas with click-to-select and drag-to-resize
+function RocketCanvas({
+  tree, selectedId, onSelect, onLengthChange,
+}: {
+  tree: OrkTree; selectedId: string | null;
+  onSelect: (id: string) => void;
+  onLengthChange: (id: string, newLength: number) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const posRef = useRef<CanvasPos[]>([]);
+  const scaleXRef = useRef<number>(1);
+  const dragRef = useRef<{ id: string; startX: number; startLen: number } | null>(null);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -598,12 +890,10 @@ function RocketCanvas({ tree, selectedId }: { tree: OrkTree; selectedId: string 
     const W = rect.width - 2 * PAD;
     const H = rect.height - 2 * PAD;
 
-    // Collect all body tubes and nosecone to compute total length and max radius
     let totalLength = 0;
     let maxRadius = 0;
     const stageComps = tree.components[0]?.children ?? [];
 
-    // Compute cumulative positions
     const positions: { comp: OrkComponent; x: number; length: number; radius: number; selected: boolean }[] = [];
     let cumX = 0;
 
@@ -614,19 +904,28 @@ function RocketCanvas({ tree, selectedId }: { tree: OrkTree; selectedId: string 
         if (len > 0) totalLength += len;
         if (rad > maxRadius) maxRadius = rad;
         positions.push({ comp, x: cumX, length: len, radius: rad, selected: comp.id === selectedId });
-        if (comp.type === 'nosecone') cumX += len;
-        else cumX += len;
+        cumX += len;
       }
     }
 
-    if (totalLength === 0 || maxRadius === 0) return;
+    if (totalLength === 0 || maxRadius === 0) { posRef.current = []; return; }
 
     const scaleX = W / totalLength;
     const bodyH = Math.min(H * 0.5, maxRadius * scaleX * 2);
     const scaleY = bodyH / (2 * maxRadius);
     const centerY = rect.height / 2;
 
-    // Draw each component
+    scaleXRef.current = scaleX;
+    posRef.current = positions.map(p => ({
+      comp: p.comp,
+      x: PAD + p.x * scaleX,
+      endX: PAD + (p.x + p.length) * scaleX,
+      topY: centerY - p.radius * scaleY,
+      bottomY: centerY + p.radius * scaleY,
+      len: p.length,
+    }));
+
+    // Draw components
     for (const p of positions) {
       const x = PAD + p.x * scaleX;
       const y1 = centerY - p.radius * scaleY;
@@ -641,24 +940,23 @@ function RocketCanvas({ tree, selectedId }: { tree: OrkTree; selectedId: string 
         const shape = (p.comp.shape as string) ?? 'conical';
         ctx.beginPath();
         if (shape === 'conical') {
-          ctx.moveTo(x, centerY - p.radius * scaleY);
+          ctx.moveTo(x, centerY);
           ctx.lineTo(x + w, y1);
           ctx.lineTo(x + w, y2);
-          ctx.lineTo(x, centerY + p.radius * scaleY);
+          ctx.closePath();
         } else if (shape === 'haack' || shape === 'ogive' || shape === 'vonkarman') {
-          // Approximate with quadratic curve
           ctx.moveTo(x, centerY);
           ctx.quadraticCurveTo(x + w * 0.15, y1, x + w, y1);
           ctx.lineTo(x + w, y2);
           ctx.quadraticCurveTo(x + w * 0.15, y2, x, centerY);
+          ctx.closePath();
         } else {
-          // elliptical/parabolic — default arc
           ctx.moveTo(x, centerY);
           ctx.quadraticCurveTo(x + w * 0.3, y1, x + w, y1);
           ctx.lineTo(x + w, y2);
           ctx.quadraticCurveTo(x + w * 0.3, y2, x, centerY);
+          ctx.closePath();
         }
-        ctx.closePath();
         ctx.fill();
         ctx.stroke();
       } else {
@@ -681,7 +979,6 @@ function RocketCanvas({ tree, selectedId }: { tree: OrkTree; selectedId: string 
         const span = ((comp.span as number) ?? 0.05) * scaleY;
         const tipChord = ((comp.tipchord as number) ?? rootChord * 0.4) * scaleX;
 
-        // Bottom fin
         const bodyEdge = centerY + maxRadius * scaleY;
         ctx.beginPath();
         ctx.moveTo(finX, bodyEdge);
@@ -692,7 +989,6 @@ function RocketCanvas({ tree, selectedId }: { tree: OrkTree; selectedId: string 
         ctx.fill();
         ctx.stroke();
 
-        // Top fin (mirror)
         const bodyEdgeTop = centerY - maxRadius * scaleY;
         ctx.beginPath();
         ctx.moveTo(finX, bodyEdgeTop);
@@ -705,20 +1001,28 @@ function RocketCanvas({ tree, selectedId }: { tree: OrkTree; selectedId: string 
       }
     }
 
-    // Draw parachutes as small circles
+    // Draw parachute indicators
     for (const comp of stageComps) {
       if (comp.type === 'parachute') {
-        // Find parent body tube position
         const selected = comp.id === selectedId;
         const pos = comp.position;
         const chuteX = PAD + ((pos?.offset ?? 0) * scaleX);
-        const bodyEdge = centerY - maxRadius * scaleY;
+        const bodyEdgeY = centerY - maxRadius * scaleY;
         ctx.fillStyle = selected ? '#10b98140' : '#6b728040';
         ctx.strokeStyle = selected ? '#34d399' : '#9ca3af';
         ctx.beginPath();
-        ctx.arc(chuteX, bodyEdge, 6, 0, Math.PI * 2);
+        ctx.arc(chuteX, bodyEdgeY, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
+      }
+    }
+
+    // Draw resize handles at right edge of selected tube components
+    for (const cp of posRef.current) {
+      if (cp.comp.id === selectedId) {
+        ctx.fillStyle = '#93c5fd';
+        const hh = cp.bottomY - cp.topY + 8;
+        ctx.fillRect(cp.endX - 4, cp.topY - 4, 8, hh);
       }
     }
   }, [tree, selectedId]);
@@ -729,29 +1033,214 @@ function RocketCanvas({ tree, selectedId }: { tree: OrkTree; selectedId: string 
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [draw]);
+  useEffect(() => {
+    const up = () => { dragRef.current = null; };
+    window.addEventListener('mouseup', up);
+    return () => window.removeEventListener('mouseup', up);
+  }, []);
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+
+    // Check if near a resize handle of the selected component
+    for (const cp of posRef.current) {
+      if (cp.comp.id === selectedId && Math.abs(mx - cp.endX) <= 10) {
+        dragRef.current = { id: cp.comp.id, startX: mx, startLen: cp.len };
+        return;
+      }
+    }
+    // Click to select
+    for (const cp of posRef.current) {
+      if (mx >= cp.x && mx <= cp.endX) {
+        onSelect(cp.comp.id);
+        return;
+      }
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+
+    // Update cursor
+    let onEdge = false;
+    for (const cp of posRef.current) {
+      if (cp.comp.id === selectedId && Math.abs(mx - cp.endX) <= 10) {
+        onEdge = true;
+        break;
+      }
+    }
+    canvas.style.cursor = onEdge ? 'ew-resize' : 'default';
+
+    // Drag resize
+    const drag = dragRef.current;
+    if (!drag) return;
+    const delta = mx - drag.startX;
+    const newLen = Math.max(0.005, drag.startLen + delta / scaleXRef.current);
+    onLengthChange(drag.id, newLen);
+  };
+
+  const handleMouseUp = () => { dragRef.current = null; };
 
   if (!tree.components.length) return null;
-  return <canvas ref={canvasRef} className="w-full h-48 border-b border-gray-800" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className="w-full h-48 border-b border-gray-800 cursor-default"
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+    />
+  );
+}
+
+// Motor search and selection for motor mount components
+function MotorSelector({ comp, onChange }: { comp: OrkComponent; onChange: (u: Partial<OrkComponent>) => void }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<MotorSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  const currentMotor = comp.motor as Record<string, unknown> | undefined;
+
+  const search = async () => {
+    if (!query.trim()) return;
+    setSearching(true);
+    setSearchError(null);
+    try {
+      const resp = await fetch(`/api/motors/search?q=${encodeURIComponent(query.trim())}`);
+      if (!resp.ok) throw new Error(resp.statusText);
+      setResults(await resp.json());
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Current motor display */}
+      {currentMotor?.designation ? (
+        <div className="bg-blue-950/40 border border-blue-500/50 rounded px-2.5 py-2 space-y-0.5">
+          <div className="text-xs font-semibold text-blue-300">{currentMotor.designation as string}</div>
+          <div className="text-[10px] text-gray-400">{currentMotor.manufacturer as string}</div>
+          {(currentMotor.diameter as number) > 0 && (
+            <div className="text-[10px] text-gray-500">
+              {((currentMotor.diameter as number) * 1000).toFixed(0)} mm diameter ·{' '}
+              {((currentMotor.length as number) * 1000).toFixed(0)} mm length
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="text-[10px] text-gray-600 italic">No motor selected</div>
+      )}
+
+      {/* Delay setting */}
+      {currentMotor && (
+        <label className="flex items-center gap-2">
+          <span className="text-xs text-gray-400 w-20 shrink-0">Igniter delay</span>
+          <input type="number" step="0.1" min="0"
+            value={typeof currentMotor.delay === 'number' ? currentMotor.delay : 0}
+            onChange={e => onChange({ motor: { ...(currentMotor as object), delay: parseFloat(e.target.value) || 0 } })}
+            className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white focus:border-blue-500 outline-none" />
+          <span className="text-[10px] text-gray-600 w-4">s</span>
+        </label>
+      )}
+
+      {/* Search */}
+      <div className="flex gap-1">
+        <input type="text" value={query}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && search()}
+          placeholder="Search motor (e.g. J401, I218)"
+          className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-blue-500 outline-none" />
+        <button onClick={search} disabled={searching || !query.trim()}
+          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-semibold px-2 py-1 rounded">
+          {searching ? '…' : 'Find'}
+        </button>
+      </div>
+      {searchError && <p className="text-[10px] text-red-400">{searchError}</p>}
+
+      {/* Results */}
+      {results.length > 0 && (
+        <div className="space-y-1 max-h-48 overflow-y-auto">
+          {results.map(r => (
+            <button key={r.id}
+              onClick={() => {
+                onChange({
+                  motor: {
+                    designation: r.designation,
+                    manufacturer: r.manufacturer,
+                    diameter: (r.diameter_mm ?? 0) / 1000,
+                    length: (r.length_mm ?? 0) / 1000,
+                    delay: typeof currentMotor?.delay === 'number' ? currentMotor.delay : 0,
+                    digest: '',
+                    type: 'reload',
+                  }
+                });
+                setResults([]);
+                setQuery('');
+              }}
+              className="w-full text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-600 rounded px-2 py-1.5 space-y-0.5 transition-colors">
+              <div className="text-xs text-white font-semibold">{r.designation}</div>
+              <div className="text-[10px] text-gray-500">
+                {r.manufacturer} · {r.impulse_class}-class · {r.avg_thrust_n?.toFixed(0)} N avg
+                {r.diameter_mm != null && ` · ${r.diameter_mm} mm dia`}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Property editor for a selected component
 function PropertyEditor({
-  comp, onChange,
-}: { comp: OrkComponent; onChange: (updates: Partial<OrkComponent>) => void }) {
+  comp, onChange, onAddChild, onDelete,
+}: {
+  comp: OrkComponent;
+  onChange: (updates: Partial<OrkComponent>) => void;
+  onAddChild?: (type: string) => void;
+  onDelete?: () => void;
+}) {
   const fields = TYPE_FIELDS[comp.type] ?? [];
+  const matOptions = TUBE_COMP_TYPES.has(comp.type) ? TUBE_MATERIALS
+    : FIN_COMP_TYPES.has(comp.type) ? FIN_MATERIALS
+    : [];
+  const isFinSet = comp.type === 'trapezoidfinset' || comp.type === 'freeformfinset';
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center gap-2 pb-2 border-b border-gray-800">
         <span className="text-lg">{TYPE_ICON[comp.type] ?? '·'}</span>
-        <div>
+        <div className="flex-1 min-w-0">
           <div className="text-xs text-gray-500">{TYPE_LABEL[comp.type] ?? comp.type}</div>
-          <input type="text" value={comp.name}
-            onChange={e => onChange({ name: e.target.value })}
-            className="bg-transparent text-sm text-white font-semibold border-b border-gray-700 focus:border-blue-500 outline-none w-full" />
+          {comp.type !== 'motormount' && (
+            <input type="text" value={comp.name}
+              onChange={e => onChange({ name: e.target.value })}
+              className="bg-transparent text-sm text-white font-semibold border-b border-gray-700 focus:border-blue-500 outline-none w-full" />
+          )}
+          {comp.type === 'motormount' && (
+            <div className="text-sm text-white font-semibold">Motor Mount</div>
+          )}
         </div>
       </div>
+
+      {/* Motor selection (motormount type) */}
+      {comp.type === 'motormount' && (
+        <div className="space-y-2">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Motor</p>
+          <MotorSelector comp={comp} onChange={onChange} />
+        </div>
+      )}
 
       {/* Dimensions */}
       {fields.length > 0 && (
@@ -806,15 +1295,59 @@ function PropertyEditor({
         </div>
       )}
 
+      {/* Cross-section (finsets) */}
+      {isFinSet && (
+        <div className="space-y-2">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Cross-Section</p>
+          <select value={(comp.crosssection as string) ?? 'flat'}
+            onChange={e => onChange({ crosssection: e.target.value })}
+            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white">
+            <option value="flat">Flat Plate</option>
+            <option value="rounded">Rounded Leading Edge</option>
+            <option value="airfoil">NACA Airfoil</option>
+            <option value="hollow">Hollow (Square)</option>
+          </select>
+        </div>
+      )}
+
+      {/* Trapezoid fin diagram */}
+      {comp.type === 'trapezoidfinset' && (
+        <div className="space-y-2">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Shape Preview</p>
+          <TrapezoidFinDiagram comp={comp} />
+        </div>
+      )}
+
+      {/* Freeform fin point editor */}
+      {comp.type === 'freeformfinset' && (
+        <div className="space-y-2">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Fin Shape</p>
+          <FreeformFinEditor comp={comp} onChange={onChange} />
+        </div>
+      )}
+
       {/* Material */}
       {comp.material && (
         <div className="space-y-2">
           <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Material</p>
-          <div className="bg-gray-900/50 border border-gray-800 rounded px-2 py-1.5 space-y-0.5">
+          {matOptions.length > 0 ? (
+            <select
+              value={matOptions.find(m => m.name === comp.material!.name) ? comp.material!.name : '__custom__'}
+              onChange={e => {
+                const m = matOptions.find(o => o.name === e.target.value);
+                if (m) onChange({ material: { ...comp.material!, name: m.name, type: m.type, density: m.density } });
+              }}
+              className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white focus:border-blue-500 outline-none">
+              {matOptions.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
+              {!matOptions.find(m => m.name === comp.material!.name) && (
+                <option value="__custom__">{comp.material!.name} (custom)</option>
+              )}
+            </select>
+          ) : (
             <div className="text-xs text-gray-200">{comp.material.name}</div>
-            <div className="text-[10px] text-gray-500">
-              {comp.material.type} · {comp.material.density.toFixed(1)} kg/m³
-            </div>
+          )}
+          <div className="text-[10px] text-gray-500">
+            {comp.material.type} · {comp.material.density.toFixed(0)} kg/m³
           </div>
         </div>
       )}
@@ -885,6 +1418,25 @@ function PropertyEditor({
           className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white resize-none"
           placeholder="Component notes…" />
       </div>
+
+      {/* Add child component */}
+      {onAddChild && (
+        <div className="space-y-1 pt-1 border-t border-gray-800">
+          <AddComponentPanel onAdd={onAddChild} />
+        </div>
+      )}
+
+      {/* Delete component */}
+      {onDelete && comp.type !== 'stage' && (
+        <div className="pt-1 border-t border-gray-800">
+          <button onClick={() => {
+            if (window.confirm(`Delete "${comp.name}"? This cannot be undone.`)) onDelete();
+          }}
+            className="w-full text-xs text-red-500 hover:text-red-400 border border-red-900/50 hover:border-red-700 rounded px-2 py-1.5 transition-colors">
+            Delete Component
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -897,6 +1449,53 @@ function EditorDesign({ setSelectedFile, setActivePage }: DesignPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const addChild = async (parentId: string, type: string) => {
+    if (!originalOrkB64) return;
+    const newComp = makeDefaultComponent(type);
+    setError(null);
+    try {
+      const resp = await fetch('/api/design/add-component', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent_id: parentId, component: newComp, ork_b64: originalOrkB64 }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(body.detail ?? resp.statusText);
+      }
+      const data = await resp.json();
+      setOrkTree(data.tree);
+      setOriginalOrkB64(data.ork_b64);
+      setSelectedId(newComp.id);
+      setDirty(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const removeComp = async (compId: string) => {
+    if (!originalOrkB64) return;
+    setError(null);
+    try {
+      const resp = await fetch('/api/design/remove-component', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comp_id: compId, ork_b64: originalOrkB64 }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(body.detail ?? resp.statusText);
+      }
+      const data = await resp.json();
+      setOrkTree(data.tree);
+      setOriginalOrkB64(data.ork_b64);
+      if (selectedId === compId) setSelectedId(null);
+      setDirty(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const loadFile = async (file: File) => {
     setError(null);
@@ -1073,21 +1672,43 @@ function EditorDesign({ setSelectedFile, setActivePage }: DesignPageProps) {
 
       {/* Center — canvas */}
       <div className="flex-1 flex flex-col min-w-0">
-        <RocketCanvas tree={orkTree} selectedId={selectedId} />
+        <RocketCanvas
+          tree={orkTree}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          onLengthChange={(id, len) => {
+            setOrkTree(prev => prev ? updateComponent(prev, id, { length: len }) : prev);
+            setDirty(true);
+          }}
+        />
         <div className="flex-1 flex items-center justify-center text-gray-700 text-xs">
           {selectedComp
-            ? `Editing: ${selectedComp.name} (${TYPE_LABEL[selectedComp.type] ?? selectedComp.type})`
-            : 'Select a component to edit'}
+            ? `${selectedComp.name} — ${TYPE_LABEL[selectedComp.type] ?? selectedComp.type} — click canvas to select · drag blue handle to resize`
+            : 'Select a component from the tree or click on the rocket'}
         </div>
       </div>
 
       {/* Right panel — property editor */}
       <aside className="w-72 shrink-0 border-l border-gray-800 overflow-y-auto p-3">
         {selectedComp ? (
-          <PropertyEditor comp={selectedComp} onChange={handleChange} />
+          <PropertyEditor
+            comp={selectedComp}
+            onChange={handleChange}
+            onAddChild={
+              (selectedComp.type === 'bodytube' || selectedComp.type === 'innertube' ||
+               selectedComp.type === 'stage' || selectedComp.type === 'tubecoupler')
+                ? (type) => addChild(selectedComp.id, type)
+                : undefined
+            }
+            onDelete={
+              selectedComp.type !== 'stage' && selectedComp.type !== 'motormount'
+                ? () => removeComp(selectedComp.id)
+                : undefined
+            }
+          />
         ) : (
           <div className="flex items-center justify-center h-full text-gray-700 text-xs">
-            Select a component
+            Select a component from the tree or click the rocket canvas
           </div>
         )}
       </aside>

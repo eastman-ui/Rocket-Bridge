@@ -31,6 +31,8 @@ async def search_motors(query: str, limit: int = 8) -> list[dict]:
                 "impulse_class": m.get("impulseClass", ""),
                 "avg_thrust_n": m.get("avgThrustN"),
                 "total_impulse_ns": m.get("totImpulseNs"),
+                "diameter_mm": m.get("diameter"),
+                "length_mm": m.get("length"),
             }
             for m in data.get("results", [])
         ]

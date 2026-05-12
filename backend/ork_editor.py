@@ -150,7 +150,7 @@ def _parse_component(elem: ET.Element) -> dict:
                 children.append(_parse_component(child_el))
             elif child_el.tag.lower() == "motormount":
                 # Parse motor mount wrapper — extract motor info
-                mm_data = {"type": "motormount"}
+                mm_data: dict = {"type": "motormount", "id": comp["id"] + "_mm", "name": "Motor Mount"}
                 motor_el = child_el.find("motor")
                 if motor_el is not None:
                     mm_data["motor"] = {
@@ -257,8 +257,7 @@ def _collect_edits(components: list, edits: Dict[str, dict]) -> None:
         if comp_id:
             edits[comp_id] = comp
         for child in comp.get("children", []):
-            if child.get("type") != "motormount":
-                _collect_edits([child], edits)
+            _collect_edits([child], edits)
 
 
 def _apply_component_edits(elem: ET.Element, edit: dict) -> None:
@@ -330,6 +329,22 @@ def _apply_component_edits(elem: ET.Element, edit: dict) -> None:
                     color_el.set(k, str(edit["color"][k]))
 
 
+def _apply_motor_edits(mm_elem: ET.Element, edit: dict) -> None:
+    """Write motor selection edits into a MotorMount XML element."""
+    motor = edit.get("motor")
+    if not motor:
+        return
+    motor_el = mm_elem.find("motor")
+    if motor_el is None:
+        motor_el = ET.SubElement(mm_elem, "motor")
+    for field in ("designation", "manufacturer", "type", "digest"):
+        if motor.get(field) is not None:
+            _set_text(motor_el, field, motor[field])
+    for field in ("diameter", "length", "delay"):
+        if motor.get(field) is not None:
+            _set_text(motor_el, field, str(motor[field]))
+
+
 def _apply_edits_to_xml(parent: ET.Element, edits: Dict[str, dict]) -> None:
     """Recursively apply edits to XML elements matched by <id>."""
     for elem in parent:
@@ -345,6 +360,16 @@ def _apply_edits_to_xml(parent: ET.Element, edits: Dict[str, dict]) -> None:
             comp_id = id_el.text.strip()
             if comp_id in edits:
                 _apply_component_edits(elem, edits[comp_id])
+
+            # Also update MotorMount inside this element's subcomponents
+            mm_key = comp_id + "_mm"
+            if mm_key in edits:
+                subs = elem.find("subcomponents")
+                if subs is not None:
+                    for sub_child in subs:
+                        if sub_child.tag.lower() == "motormount":
+                            _apply_motor_edits(sub_child, edits[mm_key])
+                            break
 
         # Recurse into children
         _apply_edits_to_xml(elem, edits)
@@ -382,3 +407,134 @@ def write_tree_to_ork(tree: dict, original_ork_bytes: bytes) -> bytes:
         return buf.getvalue()
     else:
         return xml_out.encode("utf-8")
+
+
+# ─── Component add / remove ───────────────────────────────────────────────────
+
+# Map lowercase type names to correct OpenRocket XML tag names
+_TYPE_TO_TAG: Dict[str, str] = {
+    "nosecone": "NoseCone",
+    "bodytube": "BodyTube",
+    "tubecoupler": "TubeCoupler",
+    "innertube": "InnerTube",
+    "trapezoidfinset": "TrapezoidFinSet",
+    "freeformfinset": "FreeformFinSet",
+    "parachute": "Parachute",
+    "shockcord": "ShockCord",
+    "masscomponent": "MassComponent",
+    "bulkhead": "Bulkhead",
+    "centeringring": "CenteringRing",
+    "engineblock": "EngineBlock",
+    "railbutton": "RailButton",
+}
+
+
+def _component_to_xml(comp: dict) -> ET.Element:
+    """Serialize a component dict to an XML element for insertion into the ORK tree."""
+    import uuid as _uuid
+    comp_type = comp.get("type", "")
+    tag = _TYPE_TO_TAG.get(comp_type, comp_type)
+    elem = ET.Element(tag)
+
+    _set_text(elem, "name", comp.get("name", "Component"))
+    _set_text(elem, "id", comp.get("id") or str(_uuid.uuid4()))
+    if comp.get("comment"):
+        _set_text(elem, "comment", comp["comment"])
+
+    # Axial position
+    pos = comp.get("position", {})
+    ao = ET.SubElement(elem, "axialoffset")
+    ao.set("method", pos.get("method", "top"))
+    ao.text = str(pos.get("offset", 0.0))
+    pos_el = ET.SubElement(elem, "position")
+    pos_el.set("type", pos.get("position_type", "top"))
+    pos_el.text = str(pos.get("position_value", 0.0))
+
+    # Type-specific numeric/string properties
+    for prop in EDITABLE_PER_TYPE.get(comp_type, []):
+        if prop in comp:
+            _set_text(elem, prop, str(comp[prop]))
+
+    # Common overrides
+    for prop in COMMON_EDITABLE:
+        if prop in comp and prop != "name":
+            _set_text(elem, prop, str(comp[prop]))
+
+    # Freeform fin points
+    if comp_type == "freeformfinset" and comp.get("finpoints"):
+        fp_el = ET.SubElement(elem, "finpoints")
+        for pt in comp["finpoints"]:
+            pt_el = ET.SubElement(fp_el, "point")
+            pt_el.set("x", str(pt.get("x", 0)))
+            pt_el.set("y", str(pt.get("y", 0)))
+
+    # Material
+    mat = comp.get("material")
+    if mat:
+        mat_el = ET.SubElement(elem, "material")
+        mat_el.set("type", mat.get("type", "bulk"))
+        mat_el.set("density", str(mat.get("density", 0)))
+        mat_el.text = mat.get("name", "")
+
+    ET.SubElement(elem, "subcomponents")
+    return elem
+
+
+def _find_by_id(parent: ET.Element, target_id: str) -> Optional[ET.Element]:
+    """Return the first element whose <id> child matches target_id."""
+    id_el = parent.find("id")
+    if id_el is not None and id_el.text and id_el.text.strip() == target_id:
+        return parent
+    for child in parent:
+        found = _find_by_id(child, target_id)
+        if found is not None:
+            return found
+    return None
+
+
+def _serialize_ork(root: ET.Element, original_ork_bytes: bytes) -> bytes:
+    """Serialize an XML root back to ORK bytes (ZIP or plain)."""
+    ET.indent(root, space="  ")
+    xml_out = ET.tostring(root, encoding="unicode", xml_declaration=True)
+    if original_ork_bytes[:2] == b"PK":
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("rocket.ork", xml_out)
+        return buf.getvalue()
+    return xml_out.encode("utf-8")
+
+
+def add_component_to_ork(parent_id: str, new_comp: dict, original_ork_bytes: bytes) -> bytes:
+    """Insert a new component as a child of the element with id=parent_id."""
+    xml_str = _extract_ork_xml(original_ork_bytes)
+    root = ET.fromstring(xml_str)
+
+    parent_elem = _find_by_id(root, parent_id)
+    if parent_elem is None:
+        raise ValueError(f"Parent component '{parent_id}' not found in ORK file")
+
+    subs = parent_elem.find("subcomponents")
+    if subs is None:
+        subs = ET.SubElement(parent_elem, "subcomponents")
+
+    subs.append(_component_to_xml(new_comp))
+    return _serialize_ork(root, original_ork_bytes)
+
+
+def remove_component_from_ork(comp_id: str, original_ork_bytes: bytes) -> bytes:
+    """Remove the component with id=comp_id from the ORK tree."""
+    xml_str = _extract_ork_xml(original_ork_bytes)
+    root = ET.fromstring(xml_str)
+
+    def _remove(parent: ET.Element) -> bool:
+        for child in list(parent):
+            id_el = child.find("id")
+            if id_el is not None and id_el.text and id_el.text.strip() == comp_id:
+                parent.remove(child)
+                return True
+            if _remove(child):
+                return True
+        return False
+
+    _remove(root)
+    return _serialize_ork(root, original_ork_bytes)

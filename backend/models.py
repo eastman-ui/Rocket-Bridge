@@ -82,6 +82,7 @@ class FinSetInfo(BaseModel):
     span: float
     sweep_length: float = 0
     position: float = 0
+    thickness: Optional[float] = None
     fallback_fields: list[str] = []
 
 class ComparisonResponse(BaseModel):

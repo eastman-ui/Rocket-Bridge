@@ -301,6 +301,7 @@ async def simulate(
                     fb.append("span")
                 if int(f.get("n", f.get("number", 3)) or 3) == 3:
                     fb.append("n")
+                _t = f.get("thickness")
                 fin_sets.append(FinSetInfo(
                     index=str(idx),
                     n=int(f.get("n", f.get("number", f.get("fin_count", f.get("count", 3)))) or 3),
@@ -309,6 +310,7 @@ async def simulate(
                     span=float(f.get("span", 0) or 0),
                     sweep_length=float(f.get("sweep_length", 0) or 0),
                     position=float(f.get("position", 0) or 0),
+                    thickness=float(_t) if _t is not None else None,
                     fallback_fields=fb,
                 ))
 

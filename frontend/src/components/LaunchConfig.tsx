@@ -279,6 +279,21 @@ export default function LaunchConfigForm({
   const [locError, setLocError] = useState<string | null>(null);
   const imp = unitSystem === 'imperial';
 
+  const elevTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (elevTimerRef.current) clearTimeout(elevTimerRef.current);
+    if (Math.abs(config.lat) > 90 || Math.abs(config.lon) > 180) return;
+    if (config.lat === 0 && config.lon === 0) return;
+    elevTimerRef.current = setTimeout(async () => {
+      const elev = await fetchElevation(config.lat, config.lon);
+      if (elev !== null && Math.abs(elev - config.elevation) > 1) {
+        onChange({ ...config, elevation: Math.round(elev) });
+      }
+    }, 1000);
+    return () => { if (elevTimerRef.current) clearTimeout(elevTimerRef.current); };
+  }, [config.lat, config.lon]);
+
   const handleLocationPick = (lat: number, lon: number, elev: number | null) => {
     onChange({
       ...config,

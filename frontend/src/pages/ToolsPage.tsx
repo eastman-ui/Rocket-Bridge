@@ -214,7 +214,11 @@ export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiv
       <div className="bg-gray-900 rounded-xl border border-gray-800 p-5" style={activeTool ? {} : { display: 'none' }}>
         {cachedResult && (
           <div style={activeTool === 'flutter' ? {} : { display: 'none' }}>
-            <FinFlutterTool result={cachedResult} unitSystem={unitSystem} />
+            <FinFlutterTool
+              key={`${cachedResult.rocketpy_results.apogee_m_agl}_${cachedResult.fin_sets?.[0]?.root_chord ?? 0}`}
+              result={cachedResult}
+              unitSystem={unitSystem}
+            />
           </div>
         )}
         {cachedResult && (

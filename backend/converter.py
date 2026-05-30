@@ -1038,8 +1038,7 @@ def _patch_fin_thickness(ork_path: str, params: dict) -> None:
         for fin_key, fin_m in zip(fin_keys, fin_xml_matches):
             t_m = re.search(r'<thickness>([\d.eE+\-]+)</thickness>', fin_m.group(1), re.IGNORECASE)
             if t_m:
-                fin = fins_raw[fin_key] if isinstance(fins_raw, dict) else fins_raw[fin_key]
-                fin["thickness"] = float(t_m.group(1))
+                fins_raw[fin_key]["thickness"] = float(t_m.group(1))
     except Exception:
         pass  # non-fatal
 

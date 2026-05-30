@@ -210,6 +210,7 @@ def convert_ork(ork_path: str, output_dir: str, motor_config_id: str | None = No
     _fix_motor_grain_geometry(params)
     _extract_or_stored_timeseries(ork_path, params, motor_config_id)
     _fix_trap_fin_positions_from_ork(ork_path, params)
+    _patch_fin_thickness(ork_path, params)
     _fix_rocket_mass(params)
 
     return params
@@ -720,6 +721,9 @@ def _inject_freeform_fins(ork_path: str, params: dict) -> None:
             else:
                 sweep_length = (root_chord - tip_chord) / 2.0
 
+            t_m = re.search(r'<thickness>([\d.eE+\-]+)</thickness>', section, re.IGNORECASE)
+            thickness = float(t_m.group(1)) if t_m else None
+
             trapezoidal_fins[str(i)] = {
                 "n": n,
                 "root_chord": round(root_chord, 6),
@@ -728,6 +732,7 @@ def _inject_freeform_fins(ork_path: str, params: dict) -> None:
                 "position": round(position or 0.0, 6),
                 "sweep_length": round(sweep_length, 6),
                 "freeform_points": list(zip(xs, ys)),
+                "thickness": thickness,
             }
 
         if trapezoidal_fins:
@@ -1017,6 +1022,26 @@ def _fix_trap_fin_positions_from_ork(ork_path: str, params: dict) -> None:
 
     except Exception as exc:
         logger.warning("_fix_trap_fin_positions: failed (%s) — keeping serializer value", exc)
+
+
+def _patch_fin_thickness(ork_path: str, params: dict) -> None:
+    """Read <thickness> from each <trapezoidfinset> in the ork XML and store in params."""
+    try:
+        content = _read_ork_xml(ork_path)
+        fins_raw = params.get("trapezoidal_fins", {})
+        if not fins_raw:
+            return
+        fin_keys = list(fins_raw.keys()) if isinstance(fins_raw, dict) else list(range(len(fins_raw)))
+        fin_xml_matches = list(re.finditer(
+            r'<trapezoidfinset>(.*?)</trapezoidfinset>', content, re.DOTALL | re.IGNORECASE
+        ))
+        for fin_key, fin_m in zip(fin_keys, fin_xml_matches):
+            t_m = re.search(r'<thickness>([\d.eE+\-]+)</thickness>', fin_m.group(1), re.IGNORECASE)
+            if t_m:
+                fin = fins_raw[fin_key] if isinstance(fins_raw, dict) else fins_raw[fin_key]
+                fin["thickness"] = float(t_m.group(1))
+    except Exception:
+        pass  # non-fatal
 
 
 def _fix_rocket_mass(params: dict) -> None:

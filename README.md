@@ -80,33 +80,39 @@ Save your rocket design as a `.ork` file (File → Save As).
 
 Drop the `.ork` file into the upload area. Set your launch site coordinates, elevation, rail length, inclination, and heading. Toggle between imperial and metric units at any time.
 
+**Launch site search & map:** Type any location name (including specific launch sites like "Friends of Amateur Rocketry") into the search box and select a result — coordinates and elevation fill automatically. Click **Map** to open an interactive satellite map; click anywhere or drag the marker to set a precise location. Elevation is fetched automatically from Open-Meteo.
+
 Click **Use my location** to auto-fill coordinates from your browser's geolocation.
 
-### 3. Live weather (optional)
+### 3. Select motor configuration (multi-motor files)
+
+If your `.ork` contains multiple motor configurations, a **Motor Configuration** dropdown appears below the launch config. Select the motor you want to simulate — RocketBridge runs both OpenRocket and RocketPy with that configuration. The default motor from OpenRocket is pre-selected.
+
+### 4. Live weather (optional)
 
 Enable **Use live weather (NOMADS GFS)** to pull real forecast data. GFS runs every 6 hours — pick the time closest to your launch window. Without it, a standard atmosphere (no wind) is used, so parachute drift will be zero.
 
-### 4. Run Simulation
+### 5. Run Simulation
 
 Click **Run Simulation**. RocketBridge runs OpenRocket and RocketPy simultaneously (15–30 s). Results stream in via SSE with a progress bar.
 
-### 5. Review results
+### 6. Review results
 
 - **Comparison table** — side-by-side metrics with percent deltas (green ≤5%, yellow ≤15%, red >15%)
 - **Configuration warnings** — yellow collapsible box listing any approximated parameters (collapsed by default; click to expand)
 - **Rocket Profile** — cross-section diagram of your rocket
 - **Fin Shape Comparison** — when freeform fins are approximated as trapezoidal, a diagram shows the original vs. approximated shape (in the left sidebar, collapsible)
 - **Time-series charts** — altitude, velocity, Mach, stability margin, and thrust vs. time
-- **3D trajectory** — animated flight path with event markers (launch, burnout, apogee, landing)
+- **3D trajectory** — animated flight path with event markers (launch, burnout, apogee, landing); full 6DOF rotation (drag in any direction)
 - **Rocket orientation** — animated attitude relative to the ENU frame
 - **Map overlay** — satellite imagery with trajectory path, drift forecast dots, and optional aircraft layer
 - **KML download** — open the trajectory in Google Earth Pro
 
-### 6. Correct fallback values
+### 7. Correct fallback values
 
 When RocketBridge can't extract exact values from the `.ork` file (e.g., freeform fins → trapezoidal approximation, single-grain default for multi-grain motors), it shows a **Configuration Warnings** box with editable fields. Edit the values and click **Re-run with corrected fin values** to resimulate.
 
-### 7. Rocket Details
+### 8. Rocket Details
 
 Click **Rocket Details** in the header to see motor designation, dimensions, mass breakdown, fin count, parachute count, and weather source.
 
@@ -167,7 +173,7 @@ Click the **Tools** tab in the header to access six specialized tools:
 
 ### Fin Flutter
 
-Computes critical flutter velocity vs. altitude using Raymer's simplified formula. Edit fin geometry (root chord, tip chord, span, thickness) and select a material (Aluminum 6061, G10 Fiberglass, Carbon Fiber UD, Plywood, or custom). A Mach-vs-altitude chart shows the flutter threshold against the rocket's Mach profile. A safety factor verdict (green/yellow/red) indicates whether flutter margin is adequate.
+Computes critical flutter velocity vs. altitude using Raymer's simplified formula. Edit fin geometry (root chord, tip chord, span, thickness) and select a material (Aluminum 6061, G10 Fiberglass, Carbon Fiber UD, Plywood, Bambu PAHT-CF, or custom shear modulus). A Mach-vs-altitude chart shows the flutter threshold against the rocket's Mach profile. A safety factor verdict (green/yellow/red) indicates whether flutter margin is adequate.
 
 **Requires:** Simulation result (for Mach profile data)
 
@@ -205,12 +211,45 @@ Dispersion analysis with N randomized simulations (10–500). Vary wind speed (�
 
 ---
 
+## ORK Design Editor
+
+Click the **Design** tab and then the **Edit ORK** panel to open the component editor for an uploaded `.ork` file.
+
+The editor lets you inspect and modify rocket components directly — no need to round-trip through the OpenRocket desktop app for small adjustments.
+
+**Component tree** — lists every component in the rocket (nose cone, body tubes, transitions, fin sets, parachutes, motors, etc.) with a click-to-select interface.
+
+**Property panel** — shows all editable properties for the selected component (dimensions, material, position, mass override, etc.). Edit values and save.
+
+**2D canvas** — cross-section diagram updates in real time as you edit. CG and CP markers update with each change.
+
+**Save & simulate** — write changes back to a modified `.ork` file and simulate immediately.
+
+---
+
+## Simulation Accuracy Notes
+
+RocketBridge extracts motor and aerodynamic data directly from the OpenRocket simulation stored inside the `.ork` file, correcting several limitations in rocketserializer:
+
+- **Thrust curve** — extracted from the OR simulation's databranch for the selected motor config; rocketserializer's output can include corrupt duplicate entries and coast-phase data treated as thrust
+- **Motor dry mass** — recovered from the minimum motor mass in the OR timeseries (rocketserializer zeroes this)
+- **Propellant mass** — derived from the OR mass curve (max − min motor mass), then back-calculated into grain density so RocketPy's internal grain geometry model produces the correct total propellant mass
+- **Launch site conditions** — when OR is re-run live (JAR configured), it uses your configured lat/lon/elevation; stored simulation results are not adjusted
+- **Drag curve** — extracted from the OR simulation's axial drag coefficient timeseries; overrides rocketserializer's approximation
+
+Typical agreement after these corrections: apogee within ~2%, burn time within 1%, max thrust within 1%.
+
+---
+
 ## Features
 
+- **Multi-motor selection** — pick any named motor configuration from a multi-config `.ork` file; OR and RocketPy both run with that motor
+- **Launch site map picker** — Nominatim POI search (finds specific launch sites by name), interactive Leaflet map with click/drag marker, automatic elevation lookup
 - **AI Design Builder** — describe a rocket in plain English, get a ranked motor list and a ready-to-simulate `.ork` with all candidates embedded as named flight configurations
+- **ORK Design Editor** — edit rocket components directly in the browser (dimensions, materials, positions); 2D canvas with live CG/CP markers
 - Side-by-side OpenRocket vs. RocketPy comparison with percent-delta highlighting
 - Interactive time-series charts: altitude, velocity, Mach, stability margin, thrust
-- Animated 3D trajectory plot (East/North/Altitude, metric or imperial)
+- Animated 3D trajectory plot (East/North/Altitude, metric or imperial) with full 6DOF rotation
 - Animated rocket orientation (attitude relative to ENU frame)
 - Satellite map overlay with altitude color gradient and event markers
 - Aircraft overlay with live OpenSky data and NOTAM display
@@ -221,6 +260,7 @@ Dispersion analysis with N randomized simulations (10–500). Vary wind speed (�
 - Freeform fin comparison diagram (original vs. trapezoidal approximation)
 - Editable fin override inputs with re-simulation
 - Configuration warnings for approximated motor and fin parameters
+- Corrected motor data extraction: thrust curve, dry mass, and propellant mass from OR simulation timeseries
 
 ---
 

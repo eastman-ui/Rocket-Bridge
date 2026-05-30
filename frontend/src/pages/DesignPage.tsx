@@ -1,4 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { Rocket3DView } from '../components/Rocket3DView';
+
+function parseNum(v: unknown, fallback = 0): number {
+  if (typeof v === 'number') return isNaN(v) ? fallback : v;
+  if (typeof v === 'string') {
+    const s = v.replace(/^auto\s+/, '');
+    const n = parseFloat(s);
+    return isNaN(n) ? fallback : n;
+  }
+  return fallback;
+}
 
 // ── Chat mode types (existing) ──────────────────────────────────────────────
 
@@ -131,6 +142,7 @@ const FIN_COMP_TYPES = new Set(['trapezoidfinset', 'freeformfinset']);
 interface DesignPageProps {
   setSelectedFile?: (f: File | null) => void;
   setActivePage?: (page: string) => void;
+  unitSystem?: 'metric' | 'imperial';
 }
 
 const EMPTY_DESIGN: DesignState = {
@@ -237,11 +249,28 @@ const TYPE_FIELDS: Record<string, { key: string; label: string; unit: string; st
   ],
 };
 
-// Convert internal meters value to display unit
-function toDisplay(val: unknown, unit: string): string {
+type UnitMode = 'metric' | 'imperial';
+
+// Display label for a unit in the given mode
+function unitLabel(unit: string, mode: UnitMode): string {
+  if (mode === 'imperial') {
+    if (unit === 'mm') return 'in';
+    if (unit === 'g') return 'oz';
+    if (unit === 'm') return 'ft';
+  }
+  return unit;
+}
+
+// Convert internal SI value to display string
+function toDisplay(val: unknown, unit: string, mode: UnitMode = 'metric'): string {
   if (val == null || val === '') return '';
   const n = typeof val === 'string' ? parseFloat(val) : (val as number);
   if (isNaN(n)) return '';
+  if (mode === 'imperial') {
+    if (unit === 'mm') return (n * 39.3701).toPrecision(5).replace(/\.?0+$/, ''); // m → in
+    if (unit === 'g') return (n * 35.274).toPrecision(5).replace(/\.?0+$/, '');   // kg → oz
+    if (unit === 'm') return (n * 3.28084).toPrecision(5).replace(/\.?0+$/, '');  // m → ft
+  }
   if (unit === 'mm') return (n * M_TO_MM).toPrecision(6).replace(/\.?0+$/, '');
   if (unit === 'g') return (n * 1000).toPrecision(6).replace(/\.?0+$/, '');
   if (unit === '°') return n.toFixed(1);
@@ -249,10 +278,15 @@ function toDisplay(val: unknown, unit: string): string {
   return n.toPrecision(6).replace(/\.?0+$/, '');
 }
 
-// Convert display value back to meters (internal)
-function fromDisplay(s: string, unit: string): number | null {
+// Convert display value back to SI (internal)
+function fromDisplay(s: string, unit: string, mode: UnitMode = 'metric'): number | null {
   const n = parseFloat(s);
   if (isNaN(n)) return null;
+  if (mode === 'imperial') {
+    if (unit === 'mm') return n / 39.3701; // in → m
+    if (unit === 'g') return n / 35.274;   // oz → kg
+    if (unit === 'm') return n / 3.28084;  // ft → m
+  }
   if (unit === 'mm') return n / M_TO_MM;
   if (unit === 'g') return n / 1000;
   return n;
@@ -567,6 +601,18 @@ function ChatDesign({
 
 // ── Editor mode sub-component ──────────────────────────────────────────────
 
+function findMotorMount(tree: OrkTree): OrkComponent | null {
+  function walk(comps: OrkComponent[]): OrkComponent | null {
+    for (const c of comps) {
+      if (c.type === 'motormount') return c;
+      const found = walk(c.children ?? []);
+      if (found) return found;
+    }
+    return null;
+  }
+  return walk(tree.components);
+}
+
 function findComponent(tree: OrkTree, id: string): OrkComponent | null {
   function walk(comps: OrkComponent[]): OrkComponent | null {
     for (const c of comps) {
@@ -834,29 +880,67 @@ function AddComponentPanel({ onAdd }: { onAdd: (type: string) => void }) {
   );
 }
 
+// Collapsible tree node with connector lines
+function TreeNode({ comp, selectedId, onSelect, depth }: {
+  comp: OrkComponent; selectedId: string | null;
+  onSelect: (id: string) => void; depth: number;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const hasChildren = (comp.children?.length ?? 0) > 0;
+  const isSelected = comp.id === selectedId;
+
+  return (
+    <div>
+      <div
+        className={`flex items-center gap-1 py-0.5 pr-2 rounded cursor-pointer select-none transition-colors ${
+          isSelected
+            ? 'bg-blue-600/25 text-blue-300'
+            : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+        }`}
+        style={{ paddingLeft: `${depth * 14 + 4}px` }}
+        onClick={() => onSelect(comp.id)}
+      >
+        {/* Expand/collapse toggle */}
+        <span
+          className={`w-4 h-4 flex items-center justify-center text-[9px] shrink-0 ${
+            hasChildren ? 'text-gray-500 hover:text-gray-300' : 'invisible'
+          }`}
+          onClick={e => { e.stopPropagation(); setCollapsed(c => !c); }}
+        >
+          {collapsed ? '▶' : '▼'}
+        </span>
+        <span className="shrink-0 text-sm leading-none">{TYPE_ICON[comp.type] ?? '·'}</span>
+        <span className="truncate text-xs">{comp.name}</span>
+        {isSelected && (
+          <span className="ml-auto text-[9px] text-blue-500/50 shrink-0 pl-1">
+            {(TYPE_LABEL[comp.type] ?? comp.type).slice(0, 8)}
+          </span>
+        )}
+      </div>
+
+      {hasChildren && !collapsed && (
+        <div className="relative" style={{ marginLeft: `${depth * 14 + 12}px` }}>
+          {/* Vertical connector line */}
+          <div className="absolute left-0 top-0 bottom-0 border-l border-gray-700/50" style={{ left: '6px' }} />
+          {comp.children!.map(child => (
+            <TreeNode key={child.id} comp={child} selectedId={selectedId} onSelect={onSelect} depth={1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Component tree sidebar
 function ComponentTree({
-  components, selectedId, onSelect, depth,
-}: { components: OrkComponent[]; selectedId: string | null; onSelect: (id: string) => void; depth: number }) {
+  components, selectedId, onSelect,
+}: { components: OrkComponent[]; selectedId: string | null; onSelect: (id: string) => void; }) {
   return (
-    <>
+    <div>
       {components.map(comp => (
-        <div key={comp.id}>
-          <button onClick={() => onSelect(comp.id)}
-            className={`w-full text-left px-2 py-1 rounded text-xs flex items-center gap-1.5 transition-colors ${
-              comp.id === selectedId ? 'bg-blue-600/30 text-blue-300 border border-blue-500/50'
-                : 'text-gray-400 hover:bg-gray-800 border border-transparent'
-            }`}
-            style={{ paddingLeft: `${depth * 12 + 8}px` }}>
-            <span>{TYPE_ICON[comp.type] ?? '·'}</span>
-            <span className="truncate">{comp.name}</span>
-          </button>
-          {comp.children && comp.children.length > 0 && (
-            <ComponentTree components={comp.children} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />
-          )}
-        </div>
+        <TreeNode key={comp.id} comp={comp} selectedId={selectedId} onSelect={onSelect} depth={0} />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -886,12 +970,13 @@ function RocketCanvas({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, rect.width, rect.height);
 
-    const PAD = 30;
+    const PAD = 48;
     const W = rect.width - 2 * PAD;
     const H = rect.height - 2 * PAD;
 
     let totalLength = 0;
     let maxRadius = 0;
+    let maxFinSpan = 0;
     const stageComps = tree.components[0]?.children ?? [];
 
     const positions: { comp: OrkComponent; x: number; length: number; radius: number; selected: boolean }[] = [];
@@ -905,14 +990,22 @@ function RocketCanvas({
         if (rad > maxRadius) maxRadius = rad;
         positions.push({ comp, x: cumX, length: len, radius: rad, selected: comp.id === selectedId });
         cumX += len;
+        // Track max fin span for vertical sizing
+        for (const child of comp.children ?? []) {
+          if (child.type === 'trapezoidfinset' || child.type === 'freeformfinset') {
+            const span = (child.span as number) ?? 0;
+            if (span > maxFinSpan) maxFinSpan = span;
+          }
+        }
       }
     }
 
     if (totalLength === 0 || maxRadius === 0) { posRef.current = []; return; }
 
     const scaleX = W / totalLength;
-    const bodyH = Math.min(H * 0.5, maxRadius * scaleX * 2);
-    const scaleY = bodyH / (2 * maxRadius);
+    const totalRadial = maxRadius + maxFinSpan * 1.1;
+    const bodyH = Math.min(H * 0.55, totalRadial * scaleX * 2);
+    const scaleY = bodyH / (2 * totalRadial);
     const centerY = rect.height / 2;
 
     scaleXRef.current = scaleX;
@@ -965,40 +1058,63 @@ function RocketCanvas({
       }
     }
 
-    // Draw fins
+    // Draw fins — OR method="bottom",offset=0: root TE at parent aft face
+    let cumXFin = 0;
     for (const comp of stageComps) {
-      if (comp.type === 'trapezoidfinset' || comp.type === 'freeformfinset') {
-        const selected = comp.id === selectedId;
+      const compLen = parseNum(comp.length, 0);
+      if (!['nosecone', 'bodytube', 'tubecoupler'].includes(comp.type)) continue;
+      const parentAftX = PAD + (cumXFin + compLen) * scaleX; // x pixel of parent aft face
+      for (const child of comp.children ?? []) {
+        if (child.type !== 'trapezoidfinset' && child.type !== 'freeformfinset') continue;
+        const selected = child.id === selectedId;
         ctx.fillStyle = selected ? '#3b82f680' : '#6b728080';
         ctx.strokeStyle = selected ? '#60a5fa' : '#9ca3af';
         ctx.lineWidth = selected ? 2 : 1;
 
-        const pos = comp.position;
-        const finX = PAD + ((pos?.offset ?? 0) + (pos?.position_value ?? 0)) * scaleX;
-        const rootChord = ((comp.rootchord as number) ?? (comp.sweep as number) ?? 0.1) * scaleX;
-        const span = ((comp.span as number) ?? 0.05) * scaleY;
-        const tipChord = ((comp.tipchord as number) ?? rootChord * 0.4) * scaleX;
+        const pos = child.position;
+        const method = pos?.method ?? 'top';
+        const offset = parseNum(pos?.offset, 0);
 
-        const bodyEdge = centerY + maxRadius * scaleY;
-        ctx.beginPath();
-        ctx.moveTo(finX, bodyEdge);
-        ctx.lineTo(finX + rootChord, bodyEdge);
-        ctx.lineTo(finX + rootChord - (rootChord - tipChord) / 2, bodyEdge + span);
-        ctx.lineTo(finX + (rootChord - tipChord) / 2, bodyEdge + span);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
+        // Determine fin root TE x position (in canvas pixels, left=nose, right=tail)
+        let finTEX: number;
+        if (method === 'bottom') {
+          finTEX = parentAftX + offset * scaleX; // offset=0 → at parent aft face
+        } else {
+          finTEX = PAD + cumXFin * scaleX + offset * scaleX;
+        }
 
-        const bodyEdgeTop = centerY - maxRadius * scaleY;
-        ctx.beginPath();
-        ctx.moveTo(finX, bodyEdgeTop);
-        ctx.lineTo(finX + rootChord, bodyEdgeTop);
-        ctx.lineTo(finX + rootChord - (rootChord - tipChord) / 2, bodyEdgeTop - span);
-        ctx.lineTo(finX + (rootChord - tipChord) / 2, bodyEdgeTop - span);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
+        // Root chord from finpoints (freeform) or explicit field
+        const finPts = (child.finpoints as { x: number; y: number }[]) ?? [];
+        const rootChordM = child.type === 'freeformfinset' && finPts.length > 0
+          ? Math.max(...finPts.map(p => parseNum(p.x, 0)))
+          : parseNum(child.rootchord, 0.1);
+        const rootChordPx = rootChordM * scaleX;
+        const finLEX = finTEX - rootChordPx; // root LE is rootChord to the LEFT (toward nose)
+
+        const tipChordM = parseNum(child.tipchord, 0);
+        const sweepM = parseNum(child.sweep, 0);
+        const spanPx = parseNum(child.span, 0.05) * scaleY;
+
+        // Tip LE at (sweep from root LE, TE is tipchord aft of tip LE)
+        const tipLEX = finLEX + sweepM * scaleX;
+        const tipTEX = tipLEX + tipChordM * scaleX;
+        const tipFallback = (finTEX + finLEX) / 2; // center if no tip data
+
+        const drawFin = (bodyEdgeY: number, sign: number) => {
+          ctx.beginPath();
+          ctx.moveTo(finLEX, bodyEdgeY);                                         // root LE
+          ctx.lineTo(finTEX, bodyEdgeY);                                         // root TE
+          ctx.lineTo(tipChordM > 0 ? tipTEX : tipFallback, bodyEdgeY + sign * spanPx); // tip TE
+          ctx.lineTo(tipChordM > 0 ? tipLEX : tipFallback, bodyEdgeY + sign * spanPx); // tip LE
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        };
+
+        drawFin(centerY + maxRadius * scaleY, 1);  // bottom fin
+        drawFin(centerY - maxRadius * scaleY, -1); // top fin
       }
+      cumXFin += compLen;
     }
 
     // Draw parachute indicators
@@ -1091,7 +1207,7 @@ function RocketCanvas({
   return (
     <canvas
       ref={canvasRef}
-      className="w-full h-48 border-b border-gray-800 cursor-default"
+      className="w-full h-64 border-b border-gray-800 cursor-default"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -1203,12 +1319,13 @@ function MotorSelector({ comp, onChange }: { comp: OrkComponent; onChange: (u: P
 
 // Property editor for a selected component
 function PropertyEditor({
-  comp, onChange, onAddChild, onDelete,
+  comp, onChange, onAddChild, onDelete, unitMode = 'metric',
 }: {
   comp: OrkComponent;
   onChange: (updates: Partial<OrkComponent>) => void;
   onAddChild?: (type: string) => void;
   onDelete?: () => void;
+  unitMode?: UnitMode;
 }) {
   const fields = TYPE_FIELDS[comp.type] ?? [];
   const matOptions = TUBE_COMP_TYPES.has(comp.type) ? TUBE_MATERIALS
@@ -1252,13 +1369,13 @@ function PropertyEditor({
               <label key={f.key} className="flex items-center gap-2">
                 <span className="text-xs text-gray-400 w-24 shrink-0">{f.label}</span>
                 <input type="number" step={f.step ?? 0.01}
-                  value={toDisplay(val, f.unit)}
+                  value={toDisplay(val, f.unit, unitMode)}
                   onChange={e => {
-                    const mVal = fromDisplay(e.target.value, f.unit);
+                    const mVal = fromDisplay(e.target.value, f.unit, unitMode);
                     if (mVal !== null) onChange({ [f.key]: mVal });
                   }}
                   className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white focus:border-blue-500 outline-none" />
-                <span className="text-[10px] text-gray-600 w-8">{f.unit}</span>
+                <span className="text-[10px] text-gray-600 w-8 shrink-0">{unitLabel(f.unit, unitMode)}</span>
               </label>
             );
           })}
@@ -1363,15 +1480,15 @@ function PropertyEditor({
         </label>
         {comp.overridemass != null && comp.overridemass !== 0 && (
           <label className="flex items-center gap-2">
-            <span className="text-xs text-gray-400 w-24">Mass</span>
+            <span className="text-xs text-gray-400 w-24 shrink-0">Mass</span>
             <input type="number" step={0.1}
-              value={(comp.overridemass as number * 1000).toFixed(1)}
+              value={toDisplay(comp.overridemass, 'g', unitMode)}
               onChange={e => {
-                const g = parseFloat(e.target.value);
-                if (!isNaN(g)) onChange({ overridemass: g / 1000 });
+                const v = fromDisplay(e.target.value, 'g', unitMode);
+                if (v !== null) onChange({ overridemass: v });
               }}
               className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white" />
-            <span className="text-[10px] text-gray-600 w-8">g</span>
+            <span className="text-[10px] text-gray-600 w-8 shrink-0">{unitLabel('g', unitMode)}</span>
           </label>
         )}
       </div>
@@ -1392,19 +1509,15 @@ function PropertyEditor({
               <option value="absolute">Absolute</option>
             </select>
             <input type="number" step={0.001}
-              value={(comp.position.offset * M_TO_MM).toFixed(1)}
+              value={toDisplay(comp.position.offset, 'mm', unitMode)}
               onChange={e => {
-                const mm = parseFloat(e.target.value);
-                if (!isNaN(mm)) onChange({
-                  position: {
-                    ...comp.position!,
-                    offset: mm / M_TO_MM,
-                    position_value: mm / M_TO_MM,
-                  }
+                const v = fromDisplay(e.target.value, 'mm', unitMode);
+                if (v !== null) onChange({
+                  position: { ...comp.position!, offset: v, position_value: v }
                 });
               }}
               className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white" />
-            <span className="text-[10px] text-gray-600 self-center">mm</span>
+            <span className="text-[10px] text-gray-600 self-center shrink-0">{unitLabel('mm', unitMode)}</span>
           </div>
         </div>
       )}
@@ -1441,13 +1554,16 @@ function PropertyEditor({
   );
 }
 
-function EditorDesign({ setSelectedFile, setActivePage }: DesignPageProps) {
+function EditorDesign({ setSelectedFile, setActivePage, unitSystem = 'metric' }: DesignPageProps) {
   const [orkTree, setOrkTree] = useState<OrkTree | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [originalOrkB64, setOriginalOrkB64] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [view, setView] = useState<'3d' | '2d'>('3d');
+  // Derive unit mode from app-level unit system
+  const unitMode: UnitMode = unitSystem === 'imperial' ? 'imperial' : 'metric';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addChild = async (parentId: string, type: string) => {
@@ -1656,6 +1772,39 @@ function EditorDesign({ setSelectedFile, setActivePage }: DesignPageProps) {
             </div>
           ))}
         </div>
+        {/* Motor quick-access */}
+        {(() => {
+          const mm = findMotorMount(orkTree);
+          if (!mm) return null;
+          const motor = mm.motor as Record<string, unknown> | undefined;
+          return (
+            <div className="border-t border-gray-800 p-2 space-y-1 shrink-0">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Motor</span>
+                <button onClick={() => setSelectedId(mm.id)}
+                  className="text-[10px] text-blue-400 hover:text-blue-300">edit ›</button>
+              </div>
+              {motor?.designation ? (
+                <>
+                  <div className="text-xs text-white font-semibold truncate">{motor.designation as string}</div>
+                  <div className="text-[10px] text-gray-500">{motor.manufacturer as string}</div>
+                  {(motor.diameter as number) > 0 && (
+                    <div className="text-[10px] text-gray-600">
+                      {unitMode === 'imperial'
+                        ? `${((motor.diameter as number) * 39.3701).toFixed(1)}" dia`
+                        : `${((motor.diameter as number) * 1000).toFixed(0)} mm dia`}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <button onClick={() => setSelectedId(mm.id)}
+                  className="text-[10px] text-yellow-500 hover:text-yellow-400 italic">
+                  No motor selected — click to add
+                </button>
+              )}
+            </div>
+          );
+        })()}
         {/* Save / Simulate buttons */}
         <div className="p-2 border-t border-gray-800 space-y-1.5">
           <button onClick={save} disabled={saving || !dirty}
@@ -1670,30 +1819,59 @@ function EditorDesign({ setSelectedFile, setActivePage }: DesignPageProps) {
         {error && <div className="px-2 pb-2 text-[10px] text-red-400">{error}</div>}
       </aside>
 
-      {/* Center — canvas */}
+      {/* Center — view */}
       <div className="flex-1 flex flex-col min-w-0">
-        <RocketCanvas
-          tree={orkTree}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          onLengthChange={(id, len) => {
-            setOrkTree(prev => prev ? updateComponent(prev, id, { length: len }) : prev);
-            setDirty(true);
-          }}
-        />
-        <div className="flex-1 flex items-center justify-center text-gray-700 text-xs">
+        {/* View controls bar */}
+        <div className="flex items-center gap-2 px-3 py-1 border-b border-gray-800 shrink-0">
+          <div className="flex gap-0.5">
+            <button onClick={() => setView('3d')}
+              className={`text-[10px] font-semibold px-2 py-0.5 rounded transition-colors ${view === '3d' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
+              3D
+            </button>
+            <button onClick={() => setView('2d')}
+              className={`text-[10px] font-semibold px-2 py-0.5 rounded transition-colors ${view === '2d' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
+              2D
+            </button>
+          </div>
+          <span className="ml-auto text-[9px] text-gray-600">{unitMode === 'imperial' ? 'Imperial' : 'SI'}</span>
+        </div>
+
+        <div className="flex-1 min-h-0">
+          {view === '3d' ? (
+            <Rocket3DView
+              key={orkTree.rocket_name}
+              tree={orkTree}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+            />
+          ) : (
+            <RocketCanvas
+              tree={orkTree}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onLengthChange={(id, newLen) => {
+                setOrkTree(prev => prev ? updateComponent(prev, id, { length: newLen }) : prev);
+                setDirty(true);
+              }}
+            />
+          )}
+        </div>
+        <div className="text-gray-700 text-[10px] text-center py-1 border-t border-gray-800 shrink-0">
           {selectedComp
-            ? `${selectedComp.name} — ${TYPE_LABEL[selectedComp.type] ?? selectedComp.type} — click canvas to select · drag blue handle to resize`
-            : 'Select a component from the tree or click on the rocket'}
+            ? `${selectedComp.name} — ${TYPE_LABEL[selectedComp.type] ?? selectedComp.type}`
+            : view === '3d'
+              ? 'Click a component to select · drag to orbit · scroll to zoom'
+              : 'Click a component to select · drag right edge to resize'}
         </div>
       </div>
 
       {/* Right panel — property editor */}
-      <aside className="w-72 shrink-0 border-l border-gray-800 overflow-y-auto p-3">
+      <aside className="w-96 shrink-0 border-l border-gray-800 overflow-y-auto p-3">
         {selectedComp ? (
           <PropertyEditor
             comp={selectedComp}
             onChange={handleChange}
+            unitMode={unitMode}
             onAddChild={
               (selectedComp.type === 'bodytube' || selectedComp.type === 'innertube' ||
                selectedComp.type === 'stage' || selectedComp.type === 'tubecoupler')
@@ -1718,7 +1896,7 @@ function EditorDesign({ setSelectedFile, setActivePage }: DesignPageProps) {
 
 // ── Main Design Page (mode toggle) ──────────────────────────────────────────
 
-export function DesignPage({ setSelectedFile, setActivePage }: DesignPageProps) {
+export function DesignPage({ setSelectedFile, setActivePage, unitSystem }: DesignPageProps) {
   const [mode, setMode] = useState<'chat' | 'editor'>('chat');
 
   return (
@@ -1743,7 +1921,7 @@ export function DesignPage({ setSelectedFile, setActivePage }: DesignPageProps) 
       {mode === 'chat' ? (
         <ChatDesign setSelectedFile={setSelectedFile} setActivePage={setActivePage} />
       ) : (
-        <EditorDesign setSelectedFile={setSelectedFile} setActivePage={setActivePage} />
+        <EditorDesign setSelectedFile={setSelectedFile} setActivePage={setActivePage} unitSystem={unitSystem} />
       )}
     </div>
   );

@@ -23,8 +23,8 @@ COMPONENT_PROPS: Dict[str, List[str]] = {
     "tubecoupler": ["length", "outerradius"],
     "innertube": ["length", "outerradius", "thickness",
                   "clusterconfiguration", "clusterscale", "clusterrotation"],
-    "trapezoidfinset": ["fincount", "rootchord", "tipchord", "sweep", "span",
-                        "thickness", "cant", "crosssection", "filletradius"],
+    "trapezoidfinset": ["fincount", "rootchord", "tipchord", "sweep", "sweeplength",
+                        "span", "height", "thickness", "cant", "crosssection", "filletradius"],
     "freeformfinset": ["fincount", "thickness", "cant", "crosssection"],
     "parachute": ["diameter", "cd", "deployevent", "deployaltitude", "deploydelay",
                   "linecount", "linelength"],
@@ -113,6 +113,13 @@ def _parse_component(elem: ET.Element) -> dict:
                 comp[prop] = float(el.text.strip())
             except ValueError:
                 comp[prop] = el.text.strip()
+
+    # Special: trapezoid fin — OR uses <sweeplength> and <height> for sweep/span
+    if tag == "trapezoidfinset":
+        if "sweeplength" in comp and "sweep" not in comp:
+            comp["sweep"] = comp["sweeplength"]
+        if "height" in comp and "span" not in comp:
+            comp["span"] = comp["height"]
 
     # Special: freeform fin points
     if tag == "freeformfinset":

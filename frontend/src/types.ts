@@ -85,6 +85,7 @@ export interface FinSetInfo {
   span: number;
   sweep_length: number;
   position: number;
+  thickness?: number;
   fallback_fields: string[];
 }
 

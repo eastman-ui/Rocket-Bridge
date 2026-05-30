@@ -51,12 +51,14 @@ export function FinFlutterTool({ result, unitSystem }: Props) {
   const imp = unitSystem === 'imperial';
   const rpy = result.rocketpy_results;
 
-  // Extract fin geometry from timeseries (we don't have raw params in frontend)
-  // Use a reasonable default — user can override
-  const [rootChord, setRootChord] = useState(0.254);   // m
-  const [tipChord, setTipChord] = useState(0.038);     // m
-  const [span, setSpan] = useState(0.14);               // m
-  const [thickness, setThickness] = useState(0.00381); // m (absolute fin thickness)
+  // Extract fin geometry from ork file data; fall back to sensible defaults
+  const firstFin = result.fin_sets?.[0];
+  const orkFilled = !!(firstFin?.root_chord && firstFin?.span);
+
+  const [rootChord, setRootChord] = useState(firstFin?.root_chord || 0.254);
+  const [tipChord, setTipChord] = useState(firstFin?.tip_chord || 0.038);
+  const [span, setSpan] = useState(firstFin?.span || 0.14);
+  const [thickness, setThickness] = useState(firstFin?.thickness || 0.00381);
 
   // t/c = thickness / mean_chord; recomputed from absolute thickness
   const meanChord = (rootChord + tipChord) / 2;
@@ -138,7 +140,14 @@ export function FinFlutterTool({ result, unitSystem }: Props) {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
         {/* Inputs */}
         <div className="space-y-3">
-          <p className="text-xs text-gray-500">Fin geometry (pre-fill from your design, or edit):</p>
+          <p className="text-xs text-gray-500 flex items-center gap-2">
+            Fin geometry (pre-fill from your design, or edit):
+            {orkFilled && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-blue-400 bg-blue-900/30 border border-blue-700/50 rounded px-1.5 py-0.5">
+                from .ork
+              </span>
+            )}
+          </p>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {[
               { label: 'Root chord', unit: imp ? 'in' : 'm', val: rootChord,  set: setRootChord,  scale: imp ? 39.3701 : 1, step: 0.1 },

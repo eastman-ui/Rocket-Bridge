@@ -1,3 +1,4 @@
+import csv
 import json
 import logging
 import os
@@ -11,7 +12,128 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def convert_ork(ork_path: str, output_dir: str) -> dict:
+def list_ork_motor_configs(ork_path: str) -> list[dict]:
+    """Return motor configs available in ork file.
+
+    Each entry: {configid, designation, is_default}.
+    Returns [] if the file has only one (or no) named config.
+    """
+    try:
+        content = _read_ork_xml(ork_path)
+        root = ET.fromstring(content)
+
+        # configid → designation
+        motor_map: dict[str, str] = {}
+        for motor in root.iter("motor"):
+            cid = motor.get("configid")
+            desig = motor.findtext("designation")
+            if cid and desig:
+                motor_map[cid] = desig
+
+        default_cid: str | None = None
+        for mc in root.iter("motorconfiguration"):
+            if mc.get("default") == "true":
+                default_cid = mc.get("configid")
+                break
+
+        configs = []
+        for mc in root.iter("motorconfiguration"):
+            cid = mc.get("configid")
+            if cid and cid in motor_map:
+                configs.append({
+                    "configid": cid,
+                    "designation": motor_map[cid],
+                    "is_default": cid == default_cid,
+                })
+        return configs
+    except Exception as exc:
+        logger.warning("list_ork_motor_configs: failed (%s)", exc)
+        return []
+
+
+def _get_default_config_id(root: ET.Element) -> str | None:
+    """Return configid marked default="true" in motorconfiguration elements."""
+    for mc in root.iter("motorconfiguration"):
+        if mc.get("default") == "true":
+            return mc.get("configid")
+    return None
+
+
+def get_sim_index_for_config(ork_path: str, config_id: str | None) -> int:
+    """Return the 0-based simulation index matching config_id (or default when None).
+
+    Used to tell extract_or_results which simulation to run via getSimulation(i).
+    Falls back to 0 if not found.
+    """
+    try:
+        content = _read_ork_xml(ork_path)
+        root = ET.fromstring(content)
+
+        if config_id is None:
+            config_id = _get_default_config_id(root)
+
+        sims_elem = root.find(".//simulations")
+        if sims_elem is None:
+            return 0
+
+        for i, sim in enumerate(sims_elem):
+            conds = sim.find("conditions")
+            if conds is not None:
+                cid_e = conds.find("configid")
+                if cid_e is not None and cid_e.text == config_id:
+                    return i
+        return 0
+    except Exception as exc:
+        logger.warning("get_sim_index_for_config: failed (%s)", exc)
+        return 0
+
+
+def _get_sim_data(
+    root: ET.Element, config_id: str | None
+) -> tuple[list[str], list[str]] | None:
+    """Return (column_names, datapoint_text_list) for the simulation matching config_id.
+
+    Falls back to first simulation with flight data if config_id is not found.
+    Uses default motorconfiguration when config_id is None.
+    """
+    if config_id is None:
+        config_id = _get_default_config_id(root)
+
+    # Each <simulation> contains <flightdata><databranch types="..."><datapoint>...
+    # The types attribute and datapoints live on <databranch>, not <flightdata>.
+    best: tuple[ET.Element, list[ET.Element]] | None = None
+    first: tuple[ET.Element, list[ET.Element]] | None = None
+
+    for sim in root.iter("simulation"):
+        fd = sim.find(".//flightdata")
+        if fd is None:
+            continue
+        db = fd.find("databranch")
+        if db is None:
+            continue
+        dps = db.findall("datapoint")
+        if not dps:
+            continue
+        if first is None:
+            first = (db, dps)
+        conds = sim.find("conditions")
+        if conds is not None:
+            cid_e = conds.find("configid")
+            if cid_e is not None and cid_e.text == config_id:
+                best = (db, dps)
+                break
+
+    target = best or first
+    if target is None:
+        return None
+
+    db_elem, dp_elems = target
+    types = [t.strip() for t in db_elem.get("types", "").split(",")]
+    datapoints = [dp.text or "" for dp in dp_elems]
+    return types, datapoints
+
+
+def convert_ork(ork_path: str, output_dir: str, motor_config_id: str | None = None) -> dict:
     """
     Convert .ork file to parameters.json via RocketSerializer.
 
@@ -79,13 +201,14 @@ def convert_ork(ork_path: str, output_dir: str) -> dict:
     # Each _fix function may append to params["_fallback_warnings"].
     params.setdefault("_fallback_warnings", [])
 
-    _extract_drag_from_ork(ork_path, output_dir, params)
-    _fix_motor_dry_mass(ork_path, params)
-    _fix_motor_propellant_mass(ork_path, params)
+    _extract_drag_from_ork(ork_path, output_dir, params, motor_config_id)
+    _fix_thrust_from_ork(ork_path, output_dir, params, motor_config_id)
+    _fix_motor_dry_mass(ork_path, params, motor_config_id)
+    _fix_motor_propellant_mass(ork_path, params, motor_config_id)
     _fix_motor_dry_inertia(params)
-    _extract_motor_designation(ork_path, params)  # before grain geometry check (uses designation)
+    _extract_motor_designation(ork_path, params, motor_config_id)  # before grain geometry check
     _fix_motor_grain_geometry(params)
-    _extract_or_stored_timeseries(ork_path, params)
+    _extract_or_stored_timeseries(ork_path, params, motor_config_id)
     _fix_trap_fin_positions_from_ork(ork_path, params)
     _fix_rocket_mass(params)
 
@@ -110,23 +233,24 @@ def _read_ork_xml(ork_path: str) -> str:
             return f.read()
 
 
-def _extract_drag_from_ork(ork_path: str, output_dir: str, params: dict) -> None:
+def _extract_drag_from_ork(ork_path: str, output_dir: str, params: dict, config_id: str | None = None) -> None:
     """Fix drag curve: rocketserializer uses 'Axial drag coefficient' (near-zero).
     Correct label is 'Drag coefficient' (~0.6-0.8 for typical rockets).
+    Uses simulation matching config_id (default motor config when None).
     """
     try:
         content = _read_ork_xml(ork_path)
-        types_match = re.search(r'types="([^"]+)"', content, re.IGNORECASE)
-        if not types_match:
-            logger.warning("_extract_drag: no types attribute in simulation data")
+        root = ET.fromstring(content)
+        sim_data = _get_sim_data(root, config_id)
+        if sim_data is None:
+            logger.warning("_extract_drag: no simulation data found")
             return
-        types = types_match.group(1).split(",")
+        types, datapoints = sim_data
         if "Drag coefficient" not in types or "Mach number" not in types:
             logger.warning("_extract_drag: 'Drag coefficient' or 'Mach number' not in data labels")
             return
         idx_cd = types.index("Drag coefficient")
         idx_mach = types.index("Mach number")
-        datapoints = re.findall(r"<datapoint>(.*?)</datapoint>", content, re.DOTALL | re.IGNORECASE)
         if not datapoints:
             logger.warning("_extract_drag: no datapoints found")
             return
@@ -160,20 +284,87 @@ def _extract_drag_from_ork(ork_path: str, output_dir: str, params: dict) -> None
         logger.warning("_extract_drag: failed (%s) — keeping rocketserializer drag_curve", exc)
 
 
-def _fix_motor_dry_mass(ork_path: str, params: dict) -> None:
-    """Extract motor dry mass from .ork simulation data.
-    Rocketserializer explicitly zeroes dry_mass; we recover it as min(Motor mass).
+def _fix_thrust_from_ork(ork_path: str, output_dir: str, params: dict, config_id: str | None = None) -> None:
+    """Replace rocketserializer's thrust_source.csv with data extracted from the ORK databranch.
+
+    rocketserializer can produce corrupt thrust curves for multi-config ORK files:
+    duplicate time entries and a 20+ second burn time from including coast-phase data.
+    This function extracts the correct Time+Thrust columns from the matching simulation
+    and writes a clean, monotone CSV truncated at burnout.
     """
     try:
         content = _read_ork_xml(ork_path)
-        types_match = re.search(r'types="([^"]+)"', content, re.IGNORECASE)
-        if not types_match:
+        root = ET.fromstring(content)
+        sim_data = _get_sim_data(root, config_id)
+        if sim_data is None:
             return
-        types = types_match.group(1).split(",")
+        types, datapoints = sim_data
+        if "Time" not in types or "Thrust" not in types:
+            return
+        ti = types.index("Time")
+        thr_i = types.index("Thrust")
+
+        rows: list[tuple[float, float]] = []
+        for dp in datapoints:
+            vals = dp.strip().split(",")
+            try:
+                rows.append((float(vals[ti]), float(vals[thr_i])))
+            except (ValueError, IndexError):
+                continue
+
+        if not rows:
+            return
+
+        # Deduplicate and sort by time
+        seen: dict[float, float] = {}
+        for t, th in rows:
+            seen[t] = max(seen.get(t, 0.0), th)
+        rows = sorted(seen.items())
+
+        # Find burnout: last time with thrust > 0.5 N
+        burning = [(t, th) for t, th in rows if th > 0.5]
+        if not burning:
+            return
+        burnout_t = burning[-1][0]
+
+        # Keep only burn phase + one zero entry after
+        clean = [(t, th) for t, th in rows if t <= burnout_t]
+        dt = rows[1][0] - rows[0][0] if len(rows) > 1 else 0.01
+        clean.append((burnout_t + dt, 0.0))
+
+        # Overwrite thrust_source.csv
+        thrust_path = os.path.join(output_dir, "thrust_source.csv")
+        if not os.path.exists(thrust_path):
+            return
+        with open(thrust_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            for t, th in clean:
+                writer.writerow([f"{t:.5f}", f"{th:.5f}"])
+
+        logger.info(
+            "_fix_thrust_from_ork: wrote %d rows, burnout=%.3f s, peak=%.1f N",
+            len(clean), burnout_t, max(th for _, th in clean),
+        )
+        params["motors"]["burn_time"] = round(burnout_t, 3)
+    except Exception as exc:
+        logger.warning("_fix_thrust_from_ork: failed (%s)", exc)
+
+
+def _fix_motor_dry_mass(ork_path: str, params: dict, config_id: str | None = None) -> None:
+    """Extract motor dry mass from .ork simulation data.
+    Rocketserializer explicitly zeroes dry_mass; we recover it as min(Motor mass).
+    Uses simulation matching config_id (default motor config when None).
+    """
+    try:
+        content = _read_ork_xml(ork_path)
+        root = ET.fromstring(content)
+        sim_data = _get_sim_data(root, config_id)
+        if sim_data is None:
+            return
+        types, datapoints = sim_data
         if "Motor mass" not in types:
             return
         idx = types.index("Motor mass")
-        datapoints = re.findall(r"<datapoint>(.*?)</datapoint>", content, re.DOTALL | re.IGNORECASE)
         masses = []
         for dp in datapoints:
             vals = dp.strip().split(",")
@@ -191,7 +382,7 @@ def _fix_motor_dry_mass(ork_path: str, params: dict) -> None:
         logger.warning("_fix_motor_dry_mass: failed (%s)", exc)
 
 
-def _fix_motor_propellant_mass(ork_path: str, params: dict) -> None:
+def _fix_motor_propellant_mass(ork_path: str, params: dict, config_id: str | None = None) -> None:
     """Compute propellant mass from Motor mass timeseries (max - min).
 
     The mass difference between start (loaded) and end (burnout) of the motor
@@ -204,17 +395,18 @@ def _fix_motor_propellant_mass(ork_path: str, params: dict) -> None:
     When grain_number or grain_height are wrong (e.g. single-grain approximation
     for a multi-grain motor), the derived density will be too low — we skip
     the override in that case rather than corrupting a reasonable estimate.
+    Uses simulation matching config_id (default motor config when None).
     """
     try:
         content = _read_ork_xml(ork_path)
-        types_match = re.search(r'types="([^"]+)"', content, re.IGNORECASE)
-        if not types_match:
+        root = ET.fromstring(content)
+        sim_data = _get_sim_data(root, config_id)
+        if sim_data is None:
             return
-        types = types_match.group(1).split(",")
+        types, datapoints = sim_data
         if "Motor mass" not in types:
             return
         idx = types.index("Motor mass")
-        datapoints = re.findall(r"<datapoint>(.*?)</datapoint>", content, re.DOTALL | re.IGNORECASE)
         masses = []
         for dp in datapoints:
             vals = dp.strip().split(",")
@@ -231,11 +423,10 @@ def _fix_motor_propellant_mass(ork_path: str, params: dict) -> None:
         logger.info("_fix_motor_propellant_mass: %.3f kg", propellant_mass)
 
         # Derive grain_density from propellant mass and grain geometry.
-        # Only override when the serializer didn't provide a value AND the
-        # derived density is in a plausible range for solid propellants.
-        existing_density = float(params["motors"].get("grain_density", 0) or 0)
-        if existing_density > 0:
-            return  # serializer already computed density — trust it
+        # The OR mass curve gives the true propellant mass; we back-calculate
+        # density so RocketPy computes the same mass regardless of whether
+        # rocketserializer's grain geometry is accurate (it often uses a
+        # single-grain approximation for multi-grain motors).
         grain_or = float(params["motors"].get("grain_outer_radius", 0) or 0)
         grain_ir = float(params["motors"].get("grain_initial_inner_radius", 0) or 0)
         grain_h = float(params["motors"].get("grain_initial_height", 0) or 0)
@@ -246,18 +437,17 @@ def _fix_motor_propellant_mass(ork_path: str, params: dict) -> None:
             grain_volume = math.pi * (grain_or ** 2 - ir ** 2) * grain_h * grain_n
             if grain_volume > 0:
                 density = propellant_mass / grain_volume
-                # Typical solid propellant densities: 800-2200 kg/m³
-                # Values outside this range suggest wrong grain geometry
-                # (e.g. single-grain approximation for a multi-grain motor).
-                if 800 <= density <= 2200:
-                    params["motors"]["grain_density"] = round(density, 1)
-                    logger.info("_fix_motor_propellant_mass: grain_density=%.1f kg/m³ (derived)", density)
-                else:
-                    logger.info(
-                        "_fix_motor_propellant_mass: derived density=%.1f outside plausible range — "
-                        "grain geometry may be wrong, keeping fallback",
-                        density,
-                    )
+                existing = float(params["motors"].get("grain_density", 0) or 0)
+                # Always use mass-curve derived density — it is more accurate
+                # than rocketserializer's geometry-based estimate.  Values
+                # significantly above 2200 kg/m³ indicate a geometry mismatch
+                # (too small grain volume) but using the derived value still
+                # produces the correct propellant mass in RocketPy.
+                params["motors"]["grain_density"] = round(density, 1)
+                logger.info(
+                    "_fix_motor_propellant_mass: grain_density %.1f→%.1f kg/m³ (mass-curve derived)",
+                    existing, density,
+                )
     except Exception as exc:
         logger.warning("_fix_motor_propellant_mass: failed (%s)", exc)
 
@@ -547,16 +737,32 @@ def _inject_freeform_fins(ork_path: str, params: dict) -> None:
         pass  # non-fatal — simulation continues without fin approximation
 
 
-def _extract_motor_designation(ork_path: str, params: dict) -> None:
-    """Extract motor designation (e.g. 'M2500T-P') from .ork XML motor element."""
+def _extract_motor_designation(ork_path: str, params: dict, config_id: str | None = None) -> None:
+    """Extract motor designation for the selected (or default) motor configuration."""
     try:
         content = _read_ork_xml(ork_path)
-        match = re.search(r"<designation>(.*?)</designation>", content, re.IGNORECASE)
-        if match:
-            designation = match.group(1).strip()
-            if designation:
-                params.setdefault("motors", {})["designation"] = designation
-                logger.info("_extract_motor_designation: %s", designation)
+        root = ET.fromstring(content)
+
+        if config_id is None:
+            config_id = _get_default_config_id(root)
+
+        # Find motor element with matching configid
+        designation: str | None = None
+        for motor in root.iter("motor"):
+            if motor.get("configid") == config_id:
+                designation = motor.findtext("designation")
+                break
+
+        # Fallback: first designation found
+        if not designation:
+            for motor in root.iter("motor"):
+                designation = motor.findtext("designation")
+                if designation:
+                    break
+
+        if designation:
+            params.setdefault("motors", {})["designation"] = designation.strip()
+            logger.info("_extract_motor_designation: %s", designation)
     except Exception as exc:
         logger.warning("_extract_motor_designation: failed (%s)", exc)
 
@@ -585,9 +791,10 @@ def _check_java_17_available() -> None:
         )
 
 
-def _extract_or_stored_timeseries(ork_path: str, params: dict) -> None:
+def _extract_or_stored_timeseries(ork_path: str, params: dict, config_id: str | None = None) -> None:
     """Extract OR stored simulation timeseries and at-launch stability from .ork datapoints.
 
+    Selects the simulation matching config_id (default motorconfiguration when None).
     Adds to params["stored_results"]:
       - "or_timeseries": downsampled dict of time/altitude/velocity/mach/stability/thrust
       - "launch_stability_margin": stability at first powered timestep (matches OR display)
@@ -595,10 +802,30 @@ def _extract_or_stored_timeseries(ork_path: str, params: dict) -> None:
     try:
         import math
         content = _read_ork_xml(ork_path)
-        types_match = re.search(r'types="([^"]+)"', content, re.IGNORECASE)
-        if not types_match:
+        root_elem = ET.fromstring(content)
+
+        if config_id is None:
+            config_id = _get_default_config_id(root_elem)
+
+        # Find matching simulation to extract conditions (rail length, launch altitude)
+        for sim in root_elem.iter("simulation"):
+            conds = sim.find("conditions")
+            if conds is None:
+                continue
+            cid_e = conds.find("configid")
+            if cid_e is not None and cid_e.text == config_id:
+                rl_e = conds.find("launchrodlength")
+                if rl_e is not None and rl_e.text:
+                    params.setdefault("stored_results", {})["or_launch_rod_length_m"] = float(rl_e.text)
+                alt_e = conds.find("launchaltitude")
+                if alt_e is not None and alt_e.text:
+                    params.setdefault("stored_results", {})["or_launch_altitude_m"] = float(alt_e.text)
+                break
+
+        sim_data = _get_sim_data(root_elem, config_id)
+        if sim_data is None:
             return
-        types = types_match.group(1).split(",")
+        types, datapoints = sim_data
 
         col_names = {
             "Time": None, "Altitude": None, "Total velocity": None,
@@ -609,10 +836,6 @@ def _extract_or_stored_timeseries(ork_path: str, params: dict) -> None:
                 col_names[name] = types.index(name)
 
         if col_names["Time"] is None:
-            return
-
-        datapoints = re.findall(r"<datapoint>(.*?)</datapoint>", content, re.DOTALL | re.IGNORECASE)
-        if not datapoints:
             return
 
         arrays: dict[str, list] = {k: [] for k in col_names}
@@ -626,17 +849,6 @@ def _extract_or_stored_timeseries(ork_path: str, params: dict) -> None:
                         arrays[name].append(float("nan"))
                 else:
                     arrays[name].append(float("nan"))
-
-        # Extract OR simulation conditions (rail length, altitude) for comparison context
-        cond_m = re.search(r'<conditions>(.*?)</conditions>', content, re.DOTALL | re.IGNORECASE)
-        if cond_m:
-            cond_sec = cond_m.group(1)
-            rl_m = re.search(r'<launchrodlength>([\d.eE+\-]+)</launchrodlength>', cond_sec, re.IGNORECASE)
-            if rl_m:
-                params.setdefault("stored_results", {})["or_launch_rod_length_m"] = float(rl_m.group(1))
-            alt_m = re.search(r'<launchaltitude>([\d.eE+\-]+)</launchaltitude>', cond_sec, re.IGNORECASE)
-            if alt_m:
-                params.setdefault("stored_results", {})["or_launch_altitude_m"] = float(alt_m.group(1))
 
         stab_list = arrays["Stability margin calibers"]
         launch_stab = next((s for s in stab_list if not math.isnan(s)), None)

@@ -39,6 +39,7 @@ FIN_DENSITY: dict[str, float] = {
     "fiberglass": 1820.0,
     "carbon":     1550.0,
     "plywood":     600.0,
+    "paht-cf":    1060.0,  # Bambu PAHT-CF (PA12+CF FDM) — from product datasheet
 }
 SWITCH_BAND_LEN_M = 0.0762    # 3" switch band outer tube
 NOZZLE_OVERHANG_M = 0.0254    # 1" motor nozzle overhang
@@ -865,6 +866,8 @@ FIN_SHEAR_MODULUS: dict[str, float] = {
     "fiberglass": 2.62e9,
     "carbon": 27.0e9,
     "plywood": 0.60e9,
+    # Derived: G = E_flex / 2(1+ν) = 4230MPa / 2(1.35) ≈ 1.57GPa; ν=0.35 for PA12-CF
+    "paht-cf": 1.57e9,
 }
 
 # Standard tube sizes: OD → wall thickness (inches)

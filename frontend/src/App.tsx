@@ -108,6 +108,8 @@ function loadCache(): CacheEntry | null {
 type AppState = 'idle' | 'simulating' | 'results' | 'error';
 const M_FT = 3.28084;
 
+interface MotorConfig { configid: string; designation: string; is_default: boolean; }
+
 export default function App() {
   const [appState, setAppState] = useState<AppState>('idle');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -129,6 +131,24 @@ export default function App() {
   const [resimulating, setResimulating] = useState(false);
   const [waiverRadiusM, setWaiverRadiusM] = useState(1609);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const [motorConfigs, setMotorConfigs] = useState<MotorConfig[]>([]);
+  const [selectedMotorConfigId, setSelectedMotorConfigId] = useState<string | null>(null);
+
+  // Fetch motor configs whenever a new file is selected
+  useEffect(() => {
+    if (!selectedFile) { setMotorConfigs([]); setSelectedMotorConfigId(null); return; }
+    const fd = new FormData();
+    fd.append('file', selectedFile);
+    fetch('/api/motors_in_ork', { method: 'POST', body: fd })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        const configs: MotorConfig[] = j?.configs ?? [];
+        setMotorConfigs(configs);
+        const def = configs.find(c => c.is_default) ?? configs[0] ?? null;
+        setSelectedMotorConfigId(def?.configid ?? null);
+      })
+      .catch(() => { setMotorConfigs([]); setSelectedMotorConfigId(null); });
+  }, [selectedFile]);
 
   useEffect(() => {
     const entry = loadCache();
@@ -164,6 +184,7 @@ export default function App() {
         ...(config.useLiveWeather && config.weatherDateTime
           ? { sim_datetime: config.weatherDateTime }
           : {}),
+        ...(selectedMotorConfigId ? { motor_config_id: selectedMotorConfigId } : {}),
       });
 
       const response = await fetch(`/api/simulate?${params}`, {
@@ -242,6 +263,7 @@ export default function App() {
         use_live_weather: config.useLiveWeather.toString(),
         ...(config.useLiveWeather && config.weatherDateTime ? { sim_datetime: config.weatherDateTime } : {}),
         ...(Object.keys(overrides).length > 0 ? { fin_overrides: JSON.stringify(overrides) } : {}),
+        ...(selectedMotorConfigId ? { motor_config_id: selectedMotorConfigId } : {}),
       });
       const response = await fetch(`/api/simulate?${params}`, { method: 'POST', body: formData });
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail ?? response.statusText);
@@ -386,7 +408,7 @@ export default function App() {
       </div>
 
       <div className={activePage !== 'design' ? 'hidden' : ''}>
-        <DesignPage setSelectedFile={setSelectedFile} setActivePage={setActivePage as (page: string) => void} />
+        <DesignPage setSelectedFile={setSelectedFile} setActivePage={setActivePage as (page: string) => void} unitSystem={unitSystem} />
       </div>
 
       <main className={`max-w-7xl mx-auto px-6 py-5 space-y-4 w-full flex-1 ${activePage !== 'main' ? 'hidden' : ''}`}>
@@ -407,6 +429,23 @@ export default function App() {
               unitSystem={unitSystem}
               orRailLengthM={orRailLengthM ?? undefined}
             />
+            {motorConfigs.length > 1 && (
+              <div className="bg-gray-900 rounded-xl p-4 space-y-2">
+                <label className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Motor Configuration</label>
+                <select
+                  value={selectedMotorConfigId ?? ''}
+                  onChange={e => setSelectedMotorConfigId(e.target.value || null)}
+                  disabled={isSimulating}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {motorConfigs.map(mc => (
+                    <option key={mc.configid} value={mc.configid}>
+                      {mc.designation}{mc.is_default ? ' (default)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <button
               onClick={handleSimulate}
               disabled={!selectedFile || isSimulating}

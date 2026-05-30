@@ -15,7 +15,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _run_in_subprocess(ork_path: str, jar_path: str, result_queue) -> None:
+def _run_in_subprocess(
+    ork_path: str,
+    jar_path: str,
+    result_queue,
+    sim_index: int = 0,
+    launch_lat: float | None = None,
+    launch_lon: float | None = None,
+    launch_alt_m: float | None = None,
+) -> None:
     """Worker function executed in a subprocess.  Starts a fresh JVM, runs
     OpenRocket extraction, puts the result dict on the queue, then exits
     (which cleanly shuts down the JVM)."""
@@ -32,8 +40,22 @@ def _run_in_subprocess(ork_path: str, jar_path: str, result_queue) -> None:
 
             logger.info("OR extract (subprocess): loading doc %s", ork_path)
             doc = orh.load_doc(ork_path)
-            sim = doc.getSimulation(0)
-            logger.info("OR extract (subprocess): running simulation")
+            sim = doc.getSimulation(sim_index)
+
+            # Override launch site conditions so OR uses the same site as RocketPy
+            opts = sim.getOptions()
+            if launch_lat is not None:
+                opts.setLaunchLatitude(launch_lat)
+            if launch_lon is not None:
+                opts.setLaunchLongitude(launch_lon)
+            if launch_alt_m is not None:
+                opts.setLaunchAltitude(launch_alt_m)
+                logger.info(
+                    "OR extract (subprocess): launch site set to lat=%.4f lon=%.4f alt=%.1f m",
+                    launch_lat, launch_lon, launch_alt_m,
+                )
+
+            logger.info("OR extract (subprocess): running simulation [index %d]", sim_index)
             orh.run_simulation(sim)
             logger.info("OR extract (subprocess): simulation done, fetching timeseries")
 
@@ -135,12 +157,23 @@ def _run_in_subprocess(ork_path: str, jar_path: str, result_queue) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def extract_or_results(ork_path: str, jar_path: str) -> dict:
+def extract_or_results(
+    ork_path: str,
+    jar_path: str,
+    sim_index: int = 0,
+    launch_lat: float | None = None,
+    launch_lon: float | None = None,
+    launch_alt_m: float | None = None,
+) -> dict:
     """Extract OR simulation results in an isolated subprocess.
 
     Running in a subprocess ensures the JPype/JVM (which loads libhdf5) never
     coexists in the same process as RocketPy's netCDF4 (which also uses
     libhdf5).  Without isolation, concurrent HDF5 access causes SIGSEGV.
+
+    sim_index selects which OR simulation to run (0-based, matches ORK order).
+    launch_lat/lon/alt_m override the stored launch site so OR uses the same
+    conditions as RocketPy.
     """
     if not os.path.exists(ork_path):
         raise FileNotFoundError(f"OpenRocket file not found: {ork_path}")
@@ -149,7 +182,10 @@ def extract_or_results(ork_path: str, jar_path: str) -> dict:
 
     ctx = multiprocessing.get_context("spawn")
     result_queue = ctx.Queue()
-    proc = ctx.Process(target=_run_in_subprocess, args=(ork_path, jar_path, result_queue))
+    proc = ctx.Process(
+        target=_run_in_subprocess,
+        args=(ork_path, jar_path, result_queue, sim_index, launch_lat, launch_lon, launch_alt_m),
+    )
     proc.start()
     proc.join(timeout=120)
 

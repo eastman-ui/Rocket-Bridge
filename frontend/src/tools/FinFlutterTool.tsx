@@ -14,6 +14,7 @@ const MATERIALS = [
   { label: 'G10 Fiberglass', G: 13e9 },
   { label: 'Carbon Fiber (UD)', G: 25e9 },
   { label: 'Plywood', G: 0.6e9 },
+  { label: 'Bambu PAHT-CF (FDM)', G: 1.57e9 },
   { label: 'Custom', G: null },
 ];
 

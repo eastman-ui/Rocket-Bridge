@@ -1,79 +1,204 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import type { UnitSystem } from './TimeSeriesCharts';
 import { nowRoundedLocalISO } from '../App';
 
-interface GeoResult {
-  id: number;
-  name: string;
-  admin1?: string;
-  country?: string;
-  latitude: number;
-  longitude: number;
-  elevation?: number;
+// Fix Leaflet default icon URLs broken by bundlers
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
+
+interface NominatimResult {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
 }
 
-function CitySearch({ onSelect, disabled }: {
-  onSelect: (r: GeoResult) => void;
+async function fetchElevation(lat: number, lon: number): Promise<number | null> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lon}`,
+      { signal: ctrl.signal },
+    );
+    clearTimeout(t);
+    const json = await res.json();
+    return json?.elevation?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function LocationPicker({
+  lat,
+  lon,
+  onSelect,
+  disabled,
+}: {
+  lat: number;
+  lon: number;
+  onSelect: (lat: number, lon: number, elev: number | null) => void;
   disabled: boolean;
 }) {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<GeoResult[]>([]);
-  const [open, setOpen] = useState(false);
+  const [results, setResults] = useState<NominatimResult[]>([]);
+  const [dropOpen, setDropOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const mapDivRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
 
+  // Nominatim search (debounced 400ms)
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (query.length < 2) { setResults([]); setOpen(false); return; }
+    if (query.length < 2) { setResults([]); setDropOpen(false); return; }
     timerRef.current = setTimeout(async () => {
       try {
         const r = await fetch(
-          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=6&language=en&format=json`
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6`,
+          { headers: { 'Accept-Language': 'en' } },
         );
-        const j = await r.json();
-        setResults(j.results ?? []);
-        setOpen(true);
+        const j: NominatimResult[] = await r.json();
+        setResults(j);
+        setDropOpen(j.length > 0);
       } catch { /* ignore */ }
-    }, 300);
+    }, 400);
   }, [query]);
 
+  // Close dropdown on outside click
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+    const h = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node))
+        setDropOpen(false);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
   }, []);
 
+  const handlePick = useCallback(async (newLat: number, newLon: number) => {
+    const elev = await fetchElevation(newLat, newLon);
+    onSelect(newLat, newLon, elev);
+  }, [onSelect]);
+
+  // Init Leaflet map when shown
+  useEffect(() => {
+    if (!mapOpen || !mapDivRef.current || mapRef.current) return;
+    const map = L.map(mapDivRef.current, { center: [lat, lon], zoom: 12, zoomAnimation: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors',
+    }).addTo(map);
+    const marker = L.marker([lat, lon], { draggable: true }).addTo(map);
+    marker.on('dragend', () => {
+      const p = marker.getLatLng();
+      handlePick(parseFloat(p.lat.toFixed(6)), parseFloat(p.lng.toFixed(6)));
+    });
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      const p = e.latlng;
+      marker.setLatLng(p);
+      handlePick(parseFloat(p.lat.toFixed(6)), parseFloat(p.lng.toFixed(6)));
+    });
+    mapRef.current = map;
+    markerRef.current = marker;
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+    };
+  // Only re-init when map is opened — lat/lon tracked via separate effect
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapOpen]);
+
+  // Keep marker in sync when lat/lon changes externally
+  useEffect(() => {
+    if (!mapRef.current || !markerRef.current) return;
+    markerRef.current.setLatLng([lat, lon]);
+  }, [lat, lon]);
+
+  // Resize fix when map div becomes visible
+  useEffect(() => {
+    if (!mapOpen || !mapRef.current) return;
+    setTimeout(() => mapRef.current?.invalidateSize(), 50);
+  }, [mapOpen]);
+
+  const selectResult = async (r: NominatimResult) => {
+    const newLat = parseFloat(parseFloat(r.lat).toFixed(6));
+    const newLon = parseFloat(parseFloat(r.lon).toFixed(6));
+    setQuery('');
+    setDropOpen(false);
+    // Pan map if open
+    if (mapRef.current && markerRef.current) {
+      mapRef.current.setView([newLat, newLon], 14);
+      markerRef.current.setLatLng([newLat, newLon]);
+    }
+    const elev = await fetchElevation(newLat, newLon);
+    onSelect(newLat, newLon, elev);
+  };
+
   return (
-    <div ref={containerRef} className="relative col-span-2">
-      <input
-        type="text"
-        placeholder="Search city to auto-fill coordinates..."
-        value={query}
-        onChange={e => setQuery(e.target.value)}
-        disabled={disabled}
-        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed placeholder-gray-600"
-      />
-      {open && results.length > 0 && (
-        <div className="absolute z-20 w-full bg-gray-800 border border-gray-700 rounded-lg mt-1 shadow-xl overflow-hidden">
-          {results.map(r => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => { onSelect(r); setQuery(''); setOpen(false); }}
-              className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors border-b border-gray-700/50 last:border-0"
-            >
-              <span className="font-medium">{r.name}</span>
-              {r.admin1 && <span className="text-gray-500">, {r.admin1}</span>}
-              {r.country && <span className="text-gray-500">, {r.country}</span>}
-              <span className="float-right text-gray-600 text-xs tabular-nums">
-                {r.latitude.toFixed(2)}, {r.longitude.toFixed(2)}
-              </span>
-            </button>
-          ))}
+    <div ref={containerRef} className="col-span-2 space-y-2">
+      {/* Search row */}
+      <div className="relative flex gap-2">
+        <div className="relative flex-1">
+          <input
+            type="text"
+            placeholder="Search launch site or place name…"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            disabled={disabled}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed placeholder-gray-600"
+          />
+          {dropOpen && results.length > 0 && (
+            <div className="absolute z-30 w-full bg-gray-800 border border-gray-700 rounded-lg mt-1 shadow-xl overflow-hidden">
+              {results.map(r => (
+                <button
+                  key={r.place_id}
+                  type="button"
+                  onClick={() => selectResult(r)}
+                  className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors border-b border-gray-700/50 last:border-0"
+                >
+                  <span className="block truncate">{r.display_name}</span>
+                  <span className="text-gray-500 text-xs tabular-nums">
+                    {parseFloat(r.lat).toFixed(4)}, {parseFloat(r.lon).toFixed(4)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setMapOpen(o => !o)}
+          disabled={disabled}
+          title={mapOpen ? 'Hide map' : 'Pick on map'}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+            mapOpen
+              ? 'bg-blue-600 text-white hover:bg-blue-500'
+              : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-700'
+          }`}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round"
+              d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+          </svg>
+          Map
+        </button>
+      </div>
+
+      {/* Leaflet map */}
+      {mapOpen && (
+        <div className="rounded-lg overflow-hidden border border-gray-700">
+          <div ref={mapDivRef} style={{ height: 260 }} />
+          <p className="text-xs text-gray-500 px-2 py-1 bg-gray-850 border-t border-gray-700">
+            Click map or drag pin to set location
+          </p>
         </div>
       )}
     </div>
@@ -120,7 +245,7 @@ function Field({
   onChange: (config: LaunchConfig) => void;
   disabled: boolean;
   step?: number;
-  scale?: number; // multiply stored value for display; divide input to store
+  scale?: number;
 }) {
   const displayValue = parseFloat((value * scale).toFixed(scale === 1 ? 3 : 1));
   return (
@@ -154,12 +279,12 @@ export default function LaunchConfigForm({
   const [locError, setLocError] = useState<string | null>(null);
   const imp = unitSystem === 'imperial';
 
-  const handleCitySelect = (r: GeoResult) => {
+  const handleLocationPick = (lat: number, lon: number, elev: number | null) => {
     onChange({
       ...config,
-      lat: parseFloat(r.latitude.toFixed(5)),
-      lon: parseFloat(r.longitude.toFixed(5)),
-      elevation: r.elevation ?? config.elevation,
+      lat,
+      lon,
+      ...(elev != null ? { elevation: Math.round(elev) } : {}),
     });
   };
 
@@ -174,20 +299,8 @@ export default function LaunchConfigForm({
       async (pos) => {
         const lat = parseFloat(pos.coords.latitude.toFixed(5));
         const lon = parseFloat(pos.coords.longitude.toFixed(5));
-        try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 5000);
-          const res = await fetch(
-            `https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lon}`,
-            { signal: ctrl.signal },
-          );
-          clearTimeout(timer);
-          const json = await res.json();
-          const elev = json?.elevation?.[0] ?? config.elevation;
-          onChange({ ...config, lat, lon, elevation: Math.round(elev) });
-        } catch {
-          onChange({ ...config, lat, lon });
-        }
+        const elev = await fetchElevation(lat, lon);
+        onChange({ ...config, lat, lon, ...(elev != null ? { elevation: Math.round(elev) } : {}) });
         setLocating(false);
       },
       (err) => {
@@ -224,7 +337,12 @@ export default function LaunchConfigForm({
       )}
 
       <div className="grid grid-cols-2 gap-3">
-        <CitySearch onSelect={handleCitySelect} disabled={disabled} />
+        <LocationPicker
+          lat={config.lat}
+          lon={config.lon}
+          onSelect={handleLocationPick}
+          disabled={disabled}
+        />
         <Field
           label="Latitude"
           unit="°"

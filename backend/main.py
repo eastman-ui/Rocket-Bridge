@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 
 import design as design_module
 
-from converter import convert_ork, get_stored_results, validate_ork
+from converter import convert_ork, get_stored_results, validate_ork, list_ork_motor_configs, get_sim_index_for_config
 from ork_editor import parse_ork_to_tree, write_tree_to_ork, add_component_to_ork, remove_component_from_ork
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
@@ -207,6 +207,23 @@ def _build_response(
     )
 
 
+@app.post("/motors_in_ork")
+async def motors_in_ork(file: UploadFile = File(...)):
+    """Return motor configurations available in an .ork file."""
+    if not file.filename or not file.filename.endswith(".ork"):
+        raise HTTPException(status_code=400, detail="File must be .ork")
+    contents = await file.read()
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        ork_path = os.path.join(tmp_dir, os.path.basename(file.filename) or "upload.ork")
+        with open(ork_path, "wb") as f:
+            f.write(contents)
+        configs = list_ork_motor_configs(ork_path)
+        return {"configs": configs}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 @app.post("/simulate")
 async def simulate(
     file: UploadFile = File(...),
@@ -219,6 +236,7 @@ async def simulate(
     use_live_weather: bool = Query(False),
     sim_datetime: Optional[str] = Query(None),
     fin_overrides: Optional[str] = Query(None),
+    motor_config_id: Optional[str] = Query(None),
 ):
     if not file.filename or not file.filename.endswith(".ork"):
         raise HTTPException(status_code=400, detail="File must be .ork")
@@ -231,7 +249,7 @@ async def simulate(
         try:
             # Cache check
             file_hash = hashlib.sha256(contents).hexdigest()
-            cache_key = f"{file_hash}:{lat}:{lon}:{elevation}:{rail_length}:{inclination}:{heading}:{use_live_weather}:{sim_datetime or ''}"
+            cache_key = f"{file_hash}:{lat}:{lon}:{elevation}:{rail_length}:{inclination}:{heading}:{use_live_weather}:{sim_datetime or ''}:{motor_config_id or ''}"
             if cache_key in _result_cache:
                 logger.info("Cache hit for %s", file_hash[:8])
                 yield _sse("done", 100, result=_result_cache[cache_key], cached=True)
@@ -250,7 +268,7 @@ async def simulate(
 
             # Convert
             yield _sse("converting", 20)
-            params = await asyncio.to_thread(convert_ork, ork_path, tmp_dir)
+            params = await asyncio.to_thread(convert_ork, ork_path, tmp_dir, motor_config_id)
             # Add converter fallback warnings to OR validation warnings
             for fw in params.pop("_fallback_warnings", []):
                 ork_warnings.append(fw)
@@ -301,9 +319,15 @@ async def simulate(
 
             or_fallback_reason: list[str] = []  # mutable so inner func can write
 
+            or_sim_index = await asyncio.to_thread(get_sim_index_for_config, ork_path, motor_config_id)
+            logger.info("OR sim index for config %s: %d", motor_config_id, or_sim_index)
+
             async def _run_or() -> dict:
                 try:
-                    return await asyncio.to_thread(extract_or_results, ork_path, OR_JAR_PATH)
+                    return await asyncio.to_thread(
+                        extract_or_results, ork_path, OR_JAR_PATH, or_sim_index,
+                        lat, lon, elevation,
+                    )
                 except Exception as e:
                     msg = str(e)
                     logger.warning("extract_or_results failed (%s); falling back to stored results.", msg)

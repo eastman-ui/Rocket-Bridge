@@ -898,6 +898,7 @@ async def simulate_rasaero(
             "impact_velocity_ms":  raw.get("impact_velocity_ms", 0.0),
             "out_of_rail_velocity": raw["out_of_rail_velocity"],
             "static_margin_cal":   raw["static_margin_cal"],
+            "burn_out_time_s":     raw.get("burn_out_time_s", 0.0),
             "timeseries": {
                 "time":      ts.get("time", []),
                 "mach":      ts.get("mach", []),

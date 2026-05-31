@@ -14,7 +14,23 @@ interface RasAeroResult {
   impact_velocity_ms: number;
   out_of_rail_velocity: number;
   static_margin_cal: number;
+  burn_out_time_s: number;
   timeseries: { time: number[]; mach: number[]; stability: number[] };
+}
+
+function trimToBurnout(
+  ts: { time: number[]; mach: number[]; stability: number[] },
+  burnout: number,
+) {
+  let end = ts.time.length;
+  for (let i = 0; i < ts.time.length; i++) {
+    if (ts.time[i] > burnout) { end = i; break; }
+  }
+  return {
+    time: ts.time.slice(0, end),
+    mach: ts.mach.slice(0, end),
+    stability: ts.stability.slice(0, end),
+  };
 }
 
 interface Props {
@@ -71,10 +87,13 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
     }
   };
 
+  // Burnout time: use RasAero result's if available, else fall back to cached RocketPy result
+  const burnout = result?.burn_out_time_s ?? cachedResult?.rocketpy_results?.burn_out_time_s ?? Infinity;
+
   // ── Stability vs Time chart data ──────────────────────────────────────────
   const stabTimeTraces: any[] = [];
   if (cachedResult?.or_results?.timeseries) {
-    const ts = cachedResult.or_results.timeseries;
+    const ts = trimToBurnout(cachedResult.or_results.timeseries, burnout);
     stabTimeTraces.push({
       x: ts.time, y: ts.stability,
       name: 'OpenRocket', type: 'scatter', mode: 'lines',
@@ -82,7 +101,7 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
     });
   }
   if (cachedResult?.rocketpy_results?.timeseries) {
-    const ts = cachedResult.rocketpy_results.timeseries;
+    const ts = trimToBurnout(cachedResult.rocketpy_results.timeseries, burnout);
     stabTimeTraces.push({
       x: ts.time, y: ts.stability,
       name: 'RocketPy (OR drag)', type: 'scatter', mode: 'lines',
@@ -90,8 +109,9 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
     });
   }
   if (result) {
+    const ts = trimToBurnout(result.timeseries, result.burn_out_time_s);
     stabTimeTraces.push({
-      x: result.timeseries.time, y: result.timeseries.stability,
+      x: ts.time, y: ts.stability,
       name: 'RocketPy (RasAero drag)', type: 'scatter', mode: 'lines',
       line: { color: '#34d399', width: 2 },
     });
@@ -100,7 +120,7 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
   // ── Stability vs Mach chart data ──────────────────────────────────────────
   const stabMachTraces: any[] = [];
   if (cachedResult?.or_results?.timeseries) {
-    const ts = cachedResult.or_results.timeseries;
+    const ts = trimToBurnout(cachedResult.or_results.timeseries, burnout);
     stabMachTraces.push({
       x: ts.mach, y: ts.stability,
       name: 'OpenRocket', type: 'scatter', mode: 'lines',
@@ -108,7 +128,7 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
     });
   }
   if (cachedResult?.rocketpy_results?.timeseries) {
-    const ts = cachedResult.rocketpy_results.timeseries;
+    const ts = trimToBurnout(cachedResult.rocketpy_results.timeseries, burnout);
     stabMachTraces.push({
       x: ts.mach, y: ts.stability,
       name: 'RocketPy (OR drag)', type: 'scatter', mode: 'lines',
@@ -116,8 +136,9 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
     });
   }
   if (result) {
+    const ts = trimToBurnout(result.timeseries, result.burn_out_time_s);
     stabMachTraces.push({
-      x: result.timeseries.mach, y: result.timeseries.stability,
+      x: ts.mach, y: ts.stability,
       name: 'RocketPy (RasAero drag)', type: 'scatter', mode: 'lines',
       line: { color: '#34d399', width: 2 },
     });
@@ -134,7 +155,7 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
     height: 280,
   });
 
-  const plotConfig = { displayModeBar: false, responsive: true };
+  const plotConfig = { displayModeBar: 'hover' as const, scrollZoom: true, responsive: true };
 
   const noOrkLoaded = !selectedFile;
 
@@ -211,29 +232,80 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
       )}
 
       {/* Scalar results */}
-      {result && (
-        <div className="bg-gray-800/50 rounded-xl border border-gray-700 p-4">
-          <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-3">
-            RocketPy \u2014 RasAero Drag
-          </p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {[
-              { label: 'Apogee', value: imp ? `${Math.round(result.apogee_m_agl * M_FT).toLocaleString()} ft` : `${Math.round(result.apogee_m_agl).toLocaleString()} m` },
-              { label: 'Max Velocity', value: imp ? `${(result.max_speed_ms * M_FT).toFixed(0)} ft/s` : `${result.max_speed_ms.toFixed(1)} m/s` },
-              { label: 'Max Mach', value: result.max_mach.toFixed(3) },
-              { label: 'Max Accel', value: imp ? `${(result.max_acceleration_ms2 / 9.81).toFixed(1)} G` : `${result.max_acceleration_ms2.toFixed(1)} m/s\u00b2` },
-              { label: 'Off Rail', value: imp ? `${(result.out_of_rail_velocity * M_FT).toFixed(0)} ft/s` : `${result.out_of_rail_velocity.toFixed(1)} m/s` },
-              { label: 'Impact Velocity', value: imp ? `${(result.impact_velocity_ms * M_FT).toFixed(0)} ft/s` : `${result.impact_velocity_ms.toFixed(1)} m/s` },
-              { label: 'Stability', value: `${result.static_margin_cal.toFixed(2)} cal` },
-            ].map(({ label, value }) => (
-              <div key={label} className="bg-gray-900 rounded-lg px-3 py-2">
-                <p className="text-[10px] text-gray-500 uppercase tracking-wide">{label}</p>
-                <p className="text-sm font-semibold text-gray-100 mt-0.5">{value}</p>
-              </div>
-            ))}
+      {result && (() => {
+        const rp = cachedResult?.rocketpy_results ?? null;
+        const fmt = (n: number, decimals: number, prefix = '') =>
+          (n >= 0 ? `+${n.toFixed(decimals)}` : n.toFixed(decimals)) + prefix;
+        const deltaClass = (n: number) =>
+          Math.abs(n) < 0.005 ? 'text-gray-500' : n > 0 ? 'text-green-400' : 'text-red-400';
+
+        const metrics: { label: string; value: string; delta: string | null; dClass: string }[] = [
+          {
+            label: 'Apogee',
+            value: imp ? `${Math.round(result.apogee_m_agl * M_FT).toLocaleString()} ft` : `${Math.round(result.apogee_m_agl).toLocaleString()} m`,
+            delta: rp ? (imp ? fmt((result.apogee_m_agl - rp.apogee_m_agl) * M_FT, 0, ' ft') : fmt(result.apogee_m_agl - rp.apogee_m_agl, 0, ' m')) : null,
+            dClass: rp ? deltaClass(result.apogee_m_agl - rp.apogee_m_agl) : '',
+          },
+          {
+            label: 'Max Velocity',
+            value: imp ? `${(result.max_speed_ms * M_FT).toFixed(0)} ft/s` : `${result.max_speed_ms.toFixed(1)} m/s`,
+            delta: rp ? (imp ? fmt((result.max_speed_ms - rp.max_speed_ms) * M_FT, 0, ' ft/s') : fmt(result.max_speed_ms - rp.max_speed_ms, 1, ' m/s')) : null,
+            dClass: rp ? deltaClass(result.max_speed_ms - rp.max_speed_ms) : '',
+          },
+          {
+            label: 'Max Mach',
+            value: result.max_mach.toFixed(3),
+            delta: rp ? fmt(result.max_mach - rp.max_mach, 3) : null,
+            dClass: rp ? deltaClass(result.max_mach - rp.max_mach) : '',
+          },
+          {
+            label: 'Max Accel',
+            value: imp ? `${(result.max_acceleration_ms2 / 9.81).toFixed(1)} G` : `${result.max_acceleration_ms2.toFixed(1)} m/s\u00b2`,
+            delta: rp ? (imp ? fmt((result.max_acceleration_ms2 - rp.max_acceleration_ms2) / 9.81, 1, ' G') : fmt(result.max_acceleration_ms2 - rp.max_acceleration_ms2, 1, ' m/s\u00b2')) : null,
+            dClass: rp ? deltaClass(result.max_acceleration_ms2 - rp.max_acceleration_ms2) : '',
+          },
+          {
+            label: 'Off Rail',
+            value: imp ? `${(result.out_of_rail_velocity * M_FT).toFixed(0)} ft/s` : `${result.out_of_rail_velocity.toFixed(1)} m/s`,
+            delta: rp ? (imp ? fmt((result.out_of_rail_velocity - rp.out_of_rail_velocity) * M_FT, 0, ' ft/s') : fmt(result.out_of_rail_velocity - rp.out_of_rail_velocity, 1, ' m/s')) : null,
+            dClass: rp ? deltaClass(result.out_of_rail_velocity - rp.out_of_rail_velocity) : '',
+          },
+          {
+            label: 'Impact Velocity',
+            value: imp ? `${(result.impact_velocity_ms * M_FT).toFixed(0)} ft/s` : `${result.impact_velocity_ms.toFixed(1)} m/s`,
+            delta: rp ? (imp ? fmt((result.impact_velocity_ms - rp.impact_velocity_ms) * M_FT, 0, ' ft/s') : fmt(result.impact_velocity_ms - rp.impact_velocity_ms, 1, ' m/s')) : null,
+            dClass: rp ? deltaClass(result.impact_velocity_ms - rp.impact_velocity_ms) : '',
+          },
+          {
+            label: 'Stability',
+            value: `${result.static_margin_cal.toFixed(2)} cal`,
+            delta: rp ? fmt(result.static_margin_cal - rp.static_margin_cal, 2, ' cal') : null,
+            dClass: rp ? deltaClass(result.static_margin_cal - rp.static_margin_cal) : '',
+          },
+        ];
+
+        return (
+          <div className="bg-gray-800/50 rounded-xl border border-gray-700 p-4">
+            <div className="flex items-baseline justify-between mb-3">
+              <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold">
+                RocketPy \u2014 RasAero Drag
+              </p>
+              {rp && <p className="text-[10px] text-gray-600">delta vs RocketPy (OR drag)</p>}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {metrics.map(({ label, value, delta, dClass }) => (
+                <div key={label} className="bg-gray-900 rounded-lg px-3 py-2">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wide">{label}</p>
+                  <p className="text-sm font-semibold text-gray-100 mt-0.5">{value}</p>
+                  {delta !== null && (
+                    <p className={`text-[10px] font-medium mt-0.5 ${dClass}`}>{delta}</p>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Hint shown any time cachedResult is absent — before and after running */}
       {!cachedResult && (

@@ -13,6 +13,7 @@ import { EjectionChargeTool } from '../tools/EjectionChargeTool';
 import { AltimeterTool } from '../tools/AltimeterTool';
 import { CGCPAnimationTool } from '../tools/CGCPAnimationTool';
 import { LiveTrackingTool } from '../tools/LiveTrackingTool';
+import { RasAeroDragTool } from '../tools/RasAeroDragTool';
 
 interface ToolsPageProps {
   cachedResult: ComparisonResponse | null;
@@ -24,7 +25,7 @@ interface ToolsPageProps {
   weatherData?: WeatherData;
 }
 
-type ToolId = 'flutter' | 'flightcard' | 'airspace' | 'sweep' | 'motors' | 'montecarlo' | 'altimeter' | 'ejection' | 'cgcp' | 'livetrack';
+type ToolId = 'flutter' | 'flightcard' | 'airspace' | 'sweep' | 'motors' | 'montecarlo' | 'altimeter' | 'ejection' | 'cgcp' | 'livetrack' | 'rasaero';
 
 interface ToolDef {
   id: ToolId;
@@ -147,6 +148,18 @@ const TOOLS: ToolDef[] = [
       </svg>
     ),
   },
+  {
+    id: 'rasaero',
+    label: 'RasAero Drag',
+    description: 'Run RocketPy with a RasAero drag curve and compare stability against OR and standard RocketPy',
+    needsResult: false,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.5l4-4 4 4 4-8 4 4" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 19h18" />
+      </svg>
+    ),
+  },
 ];
 
 export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiverRadiusM, mapContainerRef, weatherData }: ToolsPageProps) {
@@ -259,6 +272,14 @@ export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiv
         )}
         <div style={activeTool === 'livetrack' ? {} : { display: 'none' }}>
           <LiveTrackingTool unitSystem={unitSystem} />
+        </div>
+        <div style={activeTool === 'rasaero' ? {} : { display: 'none' }}>
+          <RasAeroDragTool
+            selectedFile={selectedFile ?? null}
+            cachedResult={cachedResult}
+            config={config}
+            unitSystem={unitSystem}
+          />
         </div>
       </div>
     </div>

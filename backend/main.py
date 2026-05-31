@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 
 import design as design_module
 
-from converter import convert_ork, get_stored_results, validate_ork, list_ork_motor_configs, get_sim_index_for_config
+from converter import convert_ork, get_stored_results, validate_ork, list_ork_motor_configs, get_sim_index_for_config, _parse_rasaero_csv
 from ork_editor import parse_ork_to_tree, write_tree_to_ork, add_component_to_ork, remove_component_from_ork
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
@@ -827,3 +827,88 @@ async def remove_component_endpoint(request: Request):
         return {"ork_b64": base64.b64encode(new_ork_bytes).decode("ascii"), "tree": tree}
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Failed to remove component: {e}")
+
+
+# ─── RasAero Drag Override ────────────────────────────────────────────────────
+
+@app.post("/simulate-rasaero")
+async def simulate_rasaero(
+    file: UploadFile = File(...),
+    drag_csv: UploadFile = File(...),
+    lat: float = Query(32.99),
+    lon: float = Query(-106.97),
+    elevation: float = Query(1400.0),
+    rail_length: float = Query(5.2),
+    inclination: float = Query(85.0),
+    heading: float = Query(0.0),
+):
+    """Run RocketPy simulation using a RasAero-exported drag curve CSV.
+
+    Accepts the same .ork file used by /simulate plus a RasAero CD export CSV.
+    Parses cols 0 (Mach) and 3 (CD Power-Off), overrides the drag curve, and
+    returns scalar results + a minimal timeseries for stability charts.
+    """
+    if not file.filename or not file.filename.endswith(".ork"):
+        raise HTTPException(status_code=400, detail="file must be .ork")
+    if not drag_csv.filename or not drag_csv.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="drag_csv must be .csv")
+
+    ork_bytes = await file.read()
+    csv_bytes = await drag_csv.read()
+
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        ork_path = os.path.join(tmp_dir, os.path.basename(file.filename) or "upload.ork")
+        csv_path = os.path.join(tmp_dir, "rasaero_upload.csv")
+        with open(ork_path, "wb") as f_:
+            f_.write(ork_bytes)
+        with open(csv_path, "wb") as f_:
+            f_.write(csv_bytes)
+
+        # Convert .ork → params
+        params = await asyncio.to_thread(convert_ork, ork_path, tmp_dir)
+        params.pop("_fallback_warnings", None)
+
+        # Parse RasAero CSV and override drag curve
+        try:
+            drag_override_path = await asyncio.to_thread(
+                _parse_rasaero_csv, csv_path, tmp_dir
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+        params["rocket"]["drag_curve"] = drag_override_path
+
+        # Run RocketPy (no OR extraction, no live weather)
+        async with _rocketpy_sem:
+            raw = await asyncio.to_thread(
+                run_rocketpy,
+                params, lat, lon, elevation, rail_length,
+                inclination, heading,
+                False,   # use_live_weather
+                tmp_dir,
+            )
+
+        ts = raw.get("timeseries", {})
+        return {
+            "apogee_m_agl":        raw["apogee_m_agl"],
+            "max_speed_ms":        raw["max_speed_ms"],
+            "max_mach":            raw["max_mach"],
+            "max_acceleration_ms2": raw["max_acceleration_ms2"],
+            "impact_velocity_ms":  raw.get("impact_velocity_ms", 0.0),
+            "out_of_rail_velocity": raw["out_of_rail_velocity"],
+            "static_margin_cal":   raw["static_margin_cal"],
+            "timeseries": {
+                "time":      ts.get("time", []),
+                "mach":      ts.get("mach", []),
+                "stability": ts.get("stability", []),
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("simulate-rasaero error")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

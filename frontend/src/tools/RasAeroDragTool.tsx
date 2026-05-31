@@ -223,6 +223,7 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
               { label: 'Max Mach', value: result.max_mach.toFixed(3) },
               { label: 'Max Accel', value: imp ? `${(result.max_acceleration_ms2 / 9.81).toFixed(1)} G` : `${result.max_acceleration_ms2.toFixed(1)} m/s\u00b2` },
               { label: 'Off Rail', value: imp ? `${(result.out_of_rail_velocity * M_FT).toFixed(0)} ft/s` : `${result.out_of_rail_velocity.toFixed(1)} m/s` },
+              { label: 'Impact Velocity', value: imp ? `${(result.impact_velocity_ms * M_FT).toFixed(0)} ft/s` : `${result.impact_velocity_ms.toFixed(1)} m/s` },
               { label: 'Stability', value: `${result.static_margin_cal.toFixed(2)} cal` },
             ].map(({ label, value }) => (
               <div key={label} className="bg-gray-900 rounded-lg px-3 py-2">

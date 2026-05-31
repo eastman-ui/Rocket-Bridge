@@ -1103,11 +1103,9 @@ def _parse_rasaero_csv(csv_path: str, output_dir: str) -> str:
     Returns the path to the written drag_override.csv.
     Raises ValueError on bad format or non-numeric data.
     """
-    import csv as _csv
-
     rows: list[tuple[float, float]] = []
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
-        reader = _csv.reader(f)
+        reader = csv.reader(f)
         header = next(reader, None)
         if header is None:
             raise ValueError("RasAero CSV is empty")
@@ -1148,7 +1146,7 @@ def _parse_rasaero_csv(csv_path: str, output_dir: str) -> str:
             seen[mach] = cd
             deduped.append((mach, cd))
 
-    drag_path = os.path.join(output_dir, "drag_override.csv")
+    drag_path = os.path.abspath(os.path.join(output_dir, "drag_override.csv"))
     np.savetxt(drag_path, deduped, delimiter=",", fmt="%.6f")
     logger.info(
         "_parse_rasaero_csv: %d pts, Mach=[%.3f,%.3f], CD=[%.3f,%.3f]",

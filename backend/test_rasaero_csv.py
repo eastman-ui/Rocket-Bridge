@@ -1,4 +1,5 @@
 import os, tempfile, textwrap, pytest
+import numpy as np
 from converter import _parse_rasaero_csv
 
 VALID_CSV = textwrap.dedent("""\
@@ -15,7 +16,6 @@ def test_valid_csv_writes_two_col_sorted():
             f.write(VALID_CSV)
         out = _parse_rasaero_csv(src, tmp)
         assert os.path.exists(out)
-        import numpy as np
         data = np.loadtxt(out, delimiter=",")
         assert data.shape[1] == 2
         assert list(data[:, 0]) == sorted(data[:, 0])
@@ -51,6 +51,5 @@ def test_deduplicates_mach():
         with open(src, "w") as f:
             f.write(dup_csv)
         out = _parse_rasaero_csv(src, tmp)
-        import numpy as np
         data = np.loadtxt(out, delimiter=",")
         assert data.shape[0] == 2

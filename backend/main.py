@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 
 import design as design_module
 
-from converter import convert_ork, get_stored_results, validate_ork, list_ork_motor_configs, get_sim_index_for_config, _parse_rasaero_csv
+from converter import convert_ork, get_stored_results, validate_ork, list_ork_motor_configs, get_sim_index_for_config, parse_rasaero_csv
 from ork_editor import parse_ork_to_tree, write_tree_to_ork, add_component_to_ork, remove_component_from_ork
 from extractor import extract_or_results, extract_or_results_from_stored
 from simulation import run_rocketpy
@@ -872,9 +872,9 @@ async def simulate_rasaero(
         # Parse RasAero CSV and override drag curve
         try:
             drag_override_path = await asyncio.to_thread(
-                _parse_rasaero_csv, csv_path, tmp_dir
+                parse_rasaero_csv, csv_path, tmp_dir
             )
-        except ValueError as exc:
+        except (ValueError, UnicodeDecodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
         params["rocket"]["drag_curve"] = drag_override_path

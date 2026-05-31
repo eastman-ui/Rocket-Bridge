@@ -1093,7 +1093,7 @@ def _fix_rocket_mass(params: dict) -> None:
         logger.warning("_fix_rocket_mass: failed (%s)", exc)
 
 
-def _parse_rasaero_csv(csv_path: str, output_dir: str) -> str:
+def parse_rasaero_csv(csv_path: str, output_dir: str) -> str:
     """Parse a RasAero CD export CSV and write a 2-column (Mach, CD) drag curve.
 
     RasAero export format (header row required):

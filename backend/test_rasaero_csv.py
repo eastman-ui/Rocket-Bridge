@@ -1,6 +1,6 @@
 import os, tempfile, textwrap, pytest
 import numpy as np
-from converter import _parse_rasaero_csv
+from converter import parse_rasaero_csv
 
 VALID_CSV = textwrap.dedent("""\
     Mach,Alpha,CD,CD Power-Off,CD Power-On,CA Power-Off,CA Power-On,CL,CN
@@ -14,7 +14,7 @@ def test_valid_csv_writes_two_col_sorted():
         src = os.path.join(tmp, "rasaero.csv")
         with open(src, "w") as f:
             f.write(VALID_CSV)
-        out = _parse_rasaero_csv(src, tmp)
+        out = parse_rasaero_csv(src, tmp)
         assert os.path.exists(out)
         data = np.loadtxt(out, delimiter=",")
         assert data.shape[1] == 2
@@ -29,7 +29,7 @@ def test_missing_header_raises():
         with open(src, "w") as f:
             f.write("A,B,C\n1,2,3\n")
         with pytest.raises(ValueError, match="Mach"):
-            _parse_rasaero_csv(src, tmp)
+            parse_rasaero_csv(src, tmp)
 
 def test_non_numeric_raises():
     with tempfile.TemporaryDirectory() as tmp:
@@ -37,7 +37,7 @@ def test_non_numeric_raises():
         with open(src, "w") as f:
             f.write("Mach,Alpha,CD,CD Power-Off\n0.5,0,0.56,abc\n")
         with pytest.raises(ValueError, match="numeric"):
-            _parse_rasaero_csv(src, tmp)
+            parse_rasaero_csv(src, tmp)
 
 def test_deduplicates_mach():
     dup_csv = textwrap.dedent("""\
@@ -50,6 +50,6 @@ def test_deduplicates_mach():
         src = os.path.join(tmp, "dup.csv")
         with open(src, "w") as f:
             f.write(dup_csv)
-        out = _parse_rasaero_csv(src, tmp)
+        out = parse_rasaero_csv(src, tmp)
         data = np.loadtxt(out, delimiter=",")
         assert data.shape[0] == 2

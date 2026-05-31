@@ -1093,6 +1093,72 @@ def _fix_rocket_mass(params: dict) -> None:
         logger.warning("_fix_rocket_mass: failed (%s)", exc)
 
 
+def _parse_rasaero_csv(csv_path: str, output_dir: str) -> str:
+    """Parse a RasAero CD export CSV and write a 2-column (Mach, CD) drag curve.
+
+    RasAero export format (header row required):
+      col 0: Mach
+      col 3: CD Power-Off
+
+    Returns the path to the written drag_override.csv.
+    Raises ValueError on bad format or non-numeric data.
+    """
+    import csv as _csv
+
+    rows: list[tuple[float, float]] = []
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = _csv.reader(f)
+        header = next(reader, None)
+        if header is None:
+            raise ValueError("RasAero CSV is empty")
+
+        header = [h.strip() for h in header]
+        if not header or header[0].lower() != "mach":
+            raise ValueError(
+                f"Expected column 0 to be 'Mach', got '{header[0] if header else ''}'. "
+                "Upload a RasAero CD export CSV."
+            )
+        if len(header) < 4:
+            raise ValueError(
+                f"RasAero CSV must have at least 4 columns (Mach, Alpha, CD, CD Power-Off); "
+                f"got {len(header)}: {header}"
+            )
+
+        for i, row in enumerate(reader, start=2):
+            if len(row) < 4:
+                continue
+            try:
+                mach = float(row[0])
+                cd   = float(row[3])
+            except ValueError:
+                raise ValueError(
+                    f"Non-numeric data in RasAero CSV at row {i}: {row[:4]}"
+                )
+            if mach > 0 and cd > 0:
+                rows.append((mach, cd))
+
+    if not rows:
+        raise ValueError("RasAero CSV contains no valid Mach/CD data rows")
+
+    rows.sort(key=lambda r: r[0])
+    seen: dict[float, float] = {}
+    deduped: list[tuple[float, float]] = []
+    for mach, cd in rows:
+        if mach not in seen:
+            seen[mach] = cd
+            deduped.append((mach, cd))
+
+    drag_path = os.path.join(output_dir, "drag_override.csv")
+    np.savetxt(drag_path, deduped, delimiter=",", fmt="%.6f")
+    logger.info(
+        "_parse_rasaero_csv: %d pts, Mach=[%.3f,%.3f], CD=[%.3f,%.3f]",
+        len(deduped),
+        deduped[0][0], deduped[-1][0],
+        deduped[0][1], deduped[-1][1],
+    )
+    return drag_path
+
+
 def validate_ork(ork_path: str) -> list[str]:
     """Inspect .ork XML and return human-readable warnings for unsupported configurations.
 

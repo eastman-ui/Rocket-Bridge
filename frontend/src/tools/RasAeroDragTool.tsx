@@ -235,14 +235,16 @@ export function RasAeroDragTool({ selectedFile, cachedResult, config, unitSystem
         </div>
       )}
 
+      {/* Hint shown any time cachedResult is absent — before and after running */}
+      {!cachedResult && (
+        <p className="text-xs text-gray-500 italic">
+          Run a simulation on the main page to add OR and RocketPy (OR drag) comparison series.
+        </p>
+      )}
+
       {/* Charts — shown as soon as any traces exist */}
       {stabTimeTraces.length > 0 && (
         <div className="space-y-4">
-          {!cachedResult && (
-            <p className="text-xs text-gray-500 italic">
-              Run a simulation on the main page to add OR and RocketPy (OR drag) comparison series.
-            </p>
-          )}
           <div>
             <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold mb-2">Stability vs Time</p>
             <Plot

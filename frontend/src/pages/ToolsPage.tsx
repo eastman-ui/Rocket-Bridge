@@ -14,6 +14,7 @@ import { AltimeterTool } from '../tools/AltimeterTool';
 import { CGCPAnimationTool } from '../tools/CGCPAnimationTool';
 import { LiveTrackingTool } from '../tools/LiveTrackingTool';
 import { RasAeroDragTool } from '../tools/RasAeroDragTool';
+import { DragTimeTool } from '../tools/DragTimeTool';
 
 interface ToolsPageProps {
   cachedResult: ComparisonResponse | null;
@@ -25,7 +26,7 @@ interface ToolsPageProps {
   weatherData?: WeatherData;
 }
 
-type ToolId = 'flutter' | 'flightcard' | 'airspace' | 'sweep' | 'motors' | 'montecarlo' | 'altimeter' | 'ejection' | 'cgcp' | 'livetrack' | 'rasaero';
+type ToolId = 'flutter' | 'flightcard' | 'airspace' | 'sweep' | 'motors' | 'montecarlo' | 'altimeter' | 'ejection' | 'cgcp' | 'livetrack' | 'rasaero' | 'dragtime';
 
 interface ToolDef {
   id: ToolId;
@@ -150,13 +151,26 @@ const TOOLS: ToolDef[] = [
   },
   {
     id: 'rasaero',
-    label: 'RasAero Drag',
+    label: 'RasAero Stability',
     description: 'Run RocketPy with a RasAero drag curve and compare stability against OR and standard RocketPy',
     needsResult: false,
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.5l4-4 4 4 4-8 4 4" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 19h18" />
+      </svg>
+    ),
+  },
+  {
+    id: 'dragtime',
+    label: 'Drag vs Time',
+    description: 'Compare drag coefficient (CD) over powered flight for OR, RocketPy, and RasAero drag curves',
+    needsResult: false,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 17l3-6 3 3 3-5 3 2 3-4" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 21h18" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v18" />
       </svg>
     ),
   },
@@ -275,6 +289,14 @@ export function ToolsPage({ cachedResult, config, unitSystem, selectedFile, waiv
         </div>
         <div style={activeTool === 'rasaero' ? {} : { display: 'none' }}>
           <RasAeroDragTool
+            selectedFile={selectedFile ?? null}
+            cachedResult={cachedResult}
+            config={config}
+            unitSystem={unitSystem}
+          />
+        </div>
+        <div style={activeTool === 'dragtime' ? {} : { display: 'none' }}>
+          <DragTimeTool
             selectedFile={selectedFile ?? null}
             cachedResult={cachedResult}
             config={config}

@@ -78,6 +78,7 @@ def _run_in_subprocess(
             mach_arr = np.asarray(data[fdt.TYPE_MACH_NUMBER])
             stab_arr = np.asarray(data[fdt.TYPE_STABILITY])
             thrust_arr = np.asarray(data[fdt.TYPE_THRUST_FORCE])
+            drag_coeff_arr = np.asarray(data[fdt.TYPE_DRAG_COEFF])
             accel_arr = np.asarray(data[fdt.TYPE_ACCELERATION_TOTAL])
 
             apogee_m_agl = float(np.max(alt_arr))
@@ -127,6 +128,7 @@ def _run_in_subprocess(
                 "mach": mach_arr[::step].tolist(),
                 "stability": stab_arr[::step].tolist(),
                 "thrust": thrust_arr[::step].tolist(),
+                "drag_coeff": drag_coeff_arr[::step].tolist(),
             }
 
             result_queue.put({

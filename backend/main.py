@@ -900,9 +900,10 @@ async def simulate_rasaero(
             "static_margin_cal":   raw["static_margin_cal"],
             "burn_out_time_s":     raw.get("burn_out_time_s", 0.0),
             "timeseries": {
-                "time":      ts.get("time", []),
-                "mach":      ts.get("mach", []),
-                "stability": ts.get("stability", []),
+                "time":       ts.get("time", []),
+                "mach":       ts.get("mach", []),
+                "stability":  ts.get("stability", []),
+                "drag_coeff": ts.get("drag_coeff", []),
             },
         }
 

@@ -261,7 +261,7 @@ def _extract_drag_from_ork(ork_path: str, output_dir: str, params: dict, config_
             try:
                 mach = float(vals[idx_mach])
                 cd = float(vals[idx_cd])
-                if mach > 0 and cd > 0:
+                if mach > 0 and 0 < cd < 5:  # exclude parachute CD (~100-200)
                     mach_vals.append(mach)
                     cd_vals.append(cd)
             except (ValueError, IndexError):

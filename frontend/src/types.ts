@@ -5,6 +5,7 @@ export interface TimeSeriesData {
   mach: number[];
   stability: number[];
   thrust: number[];
+  drag_coeff?: number[];
 }
 
 export interface Trajectory3D {

@@ -73,9 +73,9 @@ export function nowRoundedLocalISO() {
 }
 
 const defaultConfig: LaunchConfig = {
-  lat: 32.99,
-  lon: -106.97,
-  elevation: 1400,
+  lat: 0,
+  lon: 0,
+  elevation: 0,
   railLength: 5.2,
   inclination: 85,
   heading: 0,
@@ -446,9 +446,14 @@ export default function App() {
                 </select>
               </div>
             )}
+            {config.lat === 0 && config.lon === 0 && (
+              <p className="text-xs text-amber-400 bg-amber-950/30 border border-amber-800/40 rounded-lg px-3 py-2">
+                Enter a launch site location or use the GPS button before running a simulation.
+              </p>
+            )}
             <button
               onClick={handleSimulate}
-              disabled={!selectedFile || isSimulating}
+              disabled={!selectedFile || isSimulating || (config.lat === 0 && config.lon === 0)}
               className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-6 py-2.5 rounded-xl transition-colors text-sm"
             >
               {isSimulating ? 'Running…' : 'Run Simulation'}

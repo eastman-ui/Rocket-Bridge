@@ -860,6 +860,13 @@ def run_rocketpy(
     except Exception:
         pass
 
+    # Drag coefficient — evaluate the already-parsed RocketPy drag Function
+    try:
+        cd_v = np.array([float(rocket.power_on_drag(float(m))) for m in mach_resampled])
+        cd_v = np.nan_to_num(cd_v, nan=0.0, posinf=0.0, neginf=0.0)
+    except Exception:
+        cd_v = np.zeros(n)
+
     # Build downsampled lists
     step = max(1, n // 500)
     idx = np.arange(0, n, step)
@@ -871,6 +878,7 @@ def run_rocketpy(
         "mach": mach_resampled[idx].tolist(),
         "stability": stab_v[idx].tolist(),
         "thrust": thrust_resampled[idx].tolist(),
+        "drag_coeff": cd_v[idx].tolist(),
     }
 
     # ------------------------------------------------------------------

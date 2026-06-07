@@ -15,7 +15,7 @@ interface RasAeroResult {
   out_of_rail_velocity: number;
   static_margin_cal: number;
   burn_out_time_s: number;
-  timeseries: { time: number[]; mach: number[]; stability: number[] };
+  timeseries: { time: number[]; mach: number[]; stability: number[]; drag_coeff: number[] };
 }
 
 function trimToBurnout(

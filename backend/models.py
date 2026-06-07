@@ -8,6 +8,7 @@ class TimeSeriesData(BaseModel):
     mach: list[float]
     stability: list[float]
     thrust: list[float]
+    drag_coeff: list[float] = []
 
 class Trajectory3D(BaseModel):
     t: list[float]

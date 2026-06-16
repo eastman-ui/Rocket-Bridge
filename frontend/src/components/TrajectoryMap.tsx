@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { HourlyLanding, Trajectory3D } from '../types';
@@ -94,6 +94,24 @@ const DRIFT_COLORS = [
 
 const R_EARTH = 6378137;
 
+function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R_EARTH * 2 * Math.asin(Math.sqrt(a));
+}
+
+function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const la1 = lat1 * Math.PI / 180;
+  const la2 = lat2 * Math.PI / 180;
+  const y = Math.sin(dLon) * Math.cos(la2);
+  const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLon);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
 function enuToLatLon(
   x: number, y: number,
   launchLat: number, launchLon: number,
@@ -180,6 +198,46 @@ export function TrajectoryMap({
   const [showPrecip, setShowPrecip] = useState(false);
   const [acInterval, setAcInterval] = useState(120000);
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
+
+  // Drift entries shared between map markers and distance table
+  const driftEntries = useMemo(() => {
+    const entries: { label: string; lat: number; lon: number; color: string }[] = [];
+    if (hourlyLandings && hourlyLandings.length > 0) {
+      hourlyLandings.forEach((pred, ci) => {
+        entries.push({
+          label: new Date(pred.hour).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          lat: pred.lat,
+          lon: pred.lon,
+          color: DRIFT_COLORS[ci % DRIFT_COLORS.length],
+        });
+      });
+    } else if (weatherData && trajectory.t.length > 0) {
+      const hourly = weatherData.hourly;
+      const times = hourly.time as string[];
+      const speedToMs = weatherIsImperial ? 0.44704 : (1 / 3.6);
+      const pivot = launchDateTime ?? new Date().toISOString().slice(0, 16);
+      const pivotMs = new Date(pivot).getTime();
+      let count = 0;
+      for (let i = 0; i < times.length && count < 8; i++) {
+        const tMs = new Date(times[i]).getTime();
+        if (tMs < pivotMs - 3 * 3600_000) continue;
+        if (tMs > pivotMs + 21 * 3600_000) break;
+        if (new Date(times[i]).getHours() % 3 !== 0) continue;
+        const [pLat, pLon] = predictLanding(
+          trajectory, apogeeTimeS, launchLat, launchLon,
+          launchElevationM, hourly, i, speedToMs,
+        );
+        entries.push({
+          label: new Date(times[i]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          lat: pLat,
+          lon: pLon,
+          color: DRIFT_COLORS[count % DRIFT_COLORS.length],
+        });
+        count++;
+      }
+    }
+    return entries;
+  }, [hourlyLandings, weatherData, trajectory, apogeeTimeS, launchLat, launchLon, launchElevationM, weatherIsImperial, launchDateTime]);
 
   // RainViewer radar frames
   interface RainFrame { path: string; time: number; }
@@ -325,73 +383,28 @@ export function TrajectoryMap({
 
     // ── Drift predictions ──────────────────────────────────────────────────────
     const driftLatLons: [number, number][] = [];
-    const hasServerLandings = hourlyLandings && hourlyLandings.length > 0;
 
-    if (showDrift) {
+    if (showDrift && driftEntries.length > 0) {
       const driftGroup = L.layerGroup().addTo(map);
-
-      if (hasServerLandings) {
-        // GFS-based predictions from simulation backend
-        hourlyLandings!.forEach((pred, ci) => {
-          const color = DRIFT_COLORS[ci % DRIFT_COLORS.length];
-          const label = new Date(pred.hour).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          driftLatLons.push([pred.lat, pred.lon]);
-          L.marker([pred.lat, pred.lon], {
-            icon: L.divIcon({
-              html: `<div style="width:10px;height:10px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>`,
-              className: '', iconSize: [10, 10], iconAnchor: [5, 5],
-            }),
-          })
-            .bindPopup(`<b>GFS Landing Prediction</b><br>${label}<br>Lat: ${pred.lat.toFixed(5)}<br>Lon: ${pred.lon.toFixed(5)}`)
-            .addTo(driftGroup);
-          L.marker([pred.lat, pred.lon], {
-            icon: L.divIcon({
-              html: `<div style="font-size:10px;color:${color};font-weight:600;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000">${label}</div>`,
-              className: '', iconSize: [50, 14], iconAnchor: [25, 20],
-            }),
-            interactive: false, zIndexOffset: -1,
-          }).addTo(driftGroup);
-        });
-
-      } else if (weatherData) {
-        // Fallback: open-meteo client-side predictions (pre-simulation)
-        const hourly = weatherData.hourly;
-        const times = hourly.time as string[];
-        const speedToMs = weatherIsImperial ? 0.44704 : (1 / 3.6);
-        const pivot = launchDateTime ?? new Date().toISOString().slice(0, 16);
-        const pivotMs = new Date(pivot).getTime();
-        const driftHours: { idx: number; label: string }[] = [];
-        for (let i = 0; i < times.length && driftHours.length < 8; i++) {
-          const tMs = new Date(times[i]).getTime();
-          if (tMs < pivotMs - 3 * 3600_000) continue;
-          if (tMs > pivotMs + 21 * 3600_000) break;
-          if ((new Date(times[i]).getHours()) % 3 !== 0) continue;
-          driftHours.push({ idx: i, label: new Date(times[i]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
-        }
-        driftHours.forEach(({ idx, label }, ci) => {
-          const [pLat, pLon] = predictLanding(
-            trajectory, apogeeTimeS, launchLat, launchLon,
-            launchElevationM, hourly, idx, speedToMs,
-          );
-          driftLatLons.push([pLat, pLon]);
-          const color = DRIFT_COLORS[ci % DRIFT_COLORS.length];
-          L.marker([pLat, pLon], {
-            icon: L.divIcon({
-              html: `<div style="width:10px;height:10px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>`,
-              className: '', iconSize: [10, 10], iconAnchor: [5, 5],
-            }),
-          })
-            .bindPopup(`<b>Predicted Landing</b><br>${label}<br>Lat: ${pLat.toFixed(5)}<br>Lon: ${pLon.toFixed(5)}`)
-            .addTo(driftGroup);
-          L.marker([pLat, pLon], {
-            icon: L.divIcon({
-              html: `<div style="font-size:10px;color:${color};font-weight:600;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000">${label}</div>`,
-              className: '', iconSize: [50, 14], iconAnchor: [25, 20],
-            }),
-            interactive: false, zIndexOffset: -1,
-          }).addTo(driftGroup);
-        });
-      }
+      const isGfs = !!(hourlyLandings && hourlyLandings.length > 0);
+      driftEntries.forEach(({ label, lat, lon, color }) => {
+        driftLatLons.push([lat, lon]);
+        L.marker([lat, lon], {
+          icon: L.divIcon({
+            html: `<div style="width:10px;height:10px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>`,
+            className: '', iconSize: [10, 10], iconAnchor: [5, 5],
+          }),
+        })
+          .bindPopup(`<b>${isGfs ? 'GFS Landing Prediction' : 'Predicted Landing'}</b><br>${label}<br>Lat: ${lat.toFixed(5)}<br>Lon: ${lon.toFixed(5)}`)
+          .addTo(driftGroup);
+        L.marker([lat, lon], {
+          icon: L.divIcon({
+            html: `<div style="font-size:10px;color:${color};font-weight:600;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000">${label}</div>`,
+            className: '', iconSize: [50, 14], iconAnchor: [25, 20],
+          }),
+          interactive: false, zIndexOffset: -1,
+        }).addTo(driftGroup);
+      });
     }
 
     // ── Aircraft overlay ───────────────────────────────────────────────────────
@@ -442,7 +455,7 @@ export function TrajectoryMap({
       map.remove();
       leafletMap.current = null;
     };
-  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, weatherData, showDrift, showAircraft, showWaiver, aircraft, weatherIsImperial, launchDateTime, hourlyLandings, waiverRadiusM]);
+  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, showDrift, showAircraft, showWaiver, aircraft, waiverRadiusM, driftEntries, hourlyLandings]);
 
   // Weather overlay layers — toggled without rebuilding the map
   const precipLayerRef = useRef<L.TileLayer | null>(null);
@@ -586,6 +599,60 @@ export function TrajectoryMap({
         }} />
         <span className="text-xs text-gray-600">High altitude</span>
       </div>
+
+      {/* Landing distance table */}
+      {showDrift && driftEntries.length > 0 && (
+        <div className="mt-4 border-t border-gray-800 pt-3">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+            Drift Forecast — Distance from Launch
+            {!!(hourlyLandings?.length) && <span className="ml-2 text-[10px] text-gray-600 normal-case font-normal">GFS</span>}
+          </h3>
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="text-gray-500">
+                <th className="text-left pb-1.5 pr-4 font-medium">Time</th>
+                <th className="text-right pb-1.5 pr-4 font-medium">Distance</th>
+                <th className="text-right pb-1.5 pr-4 font-medium">Bearing</th>
+                <th className="text-right pb-1.5 font-medium">Lat / Lon</th>
+              </tr>
+            </thead>
+            <tbody>
+              {driftEntries.map((entry, i) => {
+                const distM = haversineM(launchLat, launchLon, entry.lat, entry.lon);
+                const distFt = distM * M_FT;
+                const bearing = bearingDeg(launchLat, launchLon, entry.lat, entry.lon);
+                return (
+                  <tr key={i} className="border-t border-gray-800/60">
+                    <td className="py-1.5 pr-4">
+                      <span
+                        className="inline-block w-2.5 h-2.5 rounded-full mr-2 align-middle shrink-0"
+                        style={{ background: entry.color }}
+                      />
+                      <span className="text-gray-300">{entry.label}</span>
+                    </td>
+                    <td className="text-right py-1.5 pr-4 tabular-nums text-gray-300">
+                      {distM >= 1000
+                        ? `${(distM / 1000).toFixed(2)} km`
+                        : `${Math.round(distM)} m`}
+                      <span className="ml-1.5 text-gray-600">
+                        ({distFt >= 5280
+                          ? `${(distFt / 5280).toFixed(2)} mi`
+                          : `${Math.round(distFt)} ft`})
+                      </span>
+                    </td>
+                    <td className="text-right py-1.5 pr-4 tabular-nums text-gray-500">
+                      {Math.round(bearing)}°
+                    </td>
+                    <td className="text-right py-1.5 tabular-nums text-gray-600">
+                      {entry.lat.toFixed(4)}, {entry.lon.toFixed(4)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

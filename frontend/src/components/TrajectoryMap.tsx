@@ -617,8 +617,10 @@ export function TrajectoryMap({
               </tr>
             </thead>
             <tbody>
-              {driftEntries.map((entry, i) => {
-                const distM = haversineM(launchLat, launchLon, entry.lat, entry.lon);
+              {[...driftEntries]
+                .map(entry => ({ entry, distM: haversineM(launchLat, launchLon, entry.lat, entry.lon) }))
+                .sort((a, b) => b.distM - a.distM)
+                .map(({ entry, distM }, i) => {
                 const distFt = distM * M_FT;
                 const bearing = bearingDeg(launchLat, launchLon, entry.lat, entry.lon);
                 return (

@@ -77,11 +77,6 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
     return undefined;
   })();
 
-  // Drift distance from launch to landing (RocketPy only — OR has no 2D trajectory)
-  const { x, y } = rocketPyResults.trajectory_3d;
-  const landingI = x.length - 1;
-  const driftM = Math.sqrt(x[landingI] ** 2 + y[landingI] ** 2);
-
   // Max altitude ASL (RocketPy) / estimate for OR using site elevation
   const rpyApogeeAsl = rocketPyResults.apogee_m_asl;
   // OR doesn't directly give ASL; show RocketPy only (no site elev available here)
@@ -174,13 +169,6 @@ export function ComparisonTable({ orResults, rocketPyResults, unitSystem, stabil
       rocketPyVal: rpyFlightTime,
       unit: 's',
       decimals: 1,
-    },
-    {
-      name: 'Drift Distance',
-      orVal: undefined,
-      rocketPyVal: driftM * altFactor,
-      unit: distUnit,
-      decimals: 0,
     },
   ];
 

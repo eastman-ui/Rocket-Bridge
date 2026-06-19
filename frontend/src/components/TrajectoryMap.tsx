@@ -358,8 +358,12 @@ export function TrajectoryMap({
     const burnoutI = nearestIdx(t, burnOutTimeS);
     const landingI = N - 1;
 
+    const fmtAlt = (m: number) => weatherIsImperial
+      ? `${Math.round(m * M_FT).toLocaleString()} ft`
+      : `${Math.round(m).toLocaleString()} m`;
+
     const altLabel = (i: number) =>
-      `${Math.round(z[i]).toLocaleString()} m ASL (${Math.round(z[i] - z[0]).toLocaleString()} m AGL)`;
+      `${fmtAlt(z[i])} ASL (${fmtAlt(z[i] - z[0])} AGL)`;
 
     // Launch
     L.marker([launchLat, launchLon], { icon: makeIcon('#34d399', 12) })
@@ -435,7 +439,9 @@ export function TrajectoryMap({
         fillColor: '#ef4444',
         fillOpacity: 0.06,
       })
-        .bindPopup(`<b>FAA Waiver Radius</b><br>${waiverRadiusM >= 1000 ? `${(waiverRadiusM / 1000).toFixed(1)} km` : `${Math.round(waiverRadiusM)} m`} (${Math.round(waiverRadiusM * M_FT).toLocaleString()} ft)`)
+        .bindPopup(weatherIsImperial
+          ? `<b>FAA Waiver Radius</b><br>${Math.round(waiverRadiusM * M_FT).toLocaleString()} ft (${(waiverRadiusM / 1000).toFixed(2)} km)`
+          : `<b>FAA Waiver Radius</b><br>${waiverRadiusM >= 1000 ? `${(waiverRadiusM / 1000).toFixed(1)} km` : `${Math.round(waiverRadiusM)} m`} (${Math.round(waiverRadiusM * M_FT).toLocaleString()} ft)`)
         .addTo(map);
     }
 
@@ -455,7 +461,7 @@ export function TrajectoryMap({
       map.remove();
       leafletMap.current = null;
     };
-  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, showDrift, showAircraft, showWaiver, aircraft, waiverRadiusM, driftEntries, hourlyLandings]);
+  }, [trajectory, launchLat, launchLon, launchElevationM, apogeeTimeS, burnOutTimeS, showDrift, showAircraft, showWaiver, aircraft, waiverRadiusM, driftEntries, hourlyLandings, weatherIsImperial]);
 
   // Weather overlay layers — toggled without rebuilding the map
   const precipLayerRef = useRef<L.TileLayer | null>(null);
@@ -633,13 +639,17 @@ export function TrajectoryMap({
                       <span className="text-gray-300">{entry.label}</span>
                     </td>
                     <td className="text-right py-1.5 pr-4 tabular-nums text-gray-300">
-                      {distM >= 1000
-                        ? `${(distM / 1000).toFixed(2)} km`
-                        : `${Math.round(distM)} m`}
+                      {weatherIsImperial
+                        ? (distFt >= 5280
+                            ? `${(distFt / 5280).toFixed(2)} mi`
+                            : `${Math.round(distFt)} ft`)
+                        : (distM >= 1000
+                            ? `${(distM / 1000).toFixed(2)} km`
+                            : `${Math.round(distM)} m`)}
                       <span className="ml-1.5 text-gray-600">
-                        ({distFt >= 5280
-                          ? `${(distFt / 5280).toFixed(2)} mi`
-                          : `${Math.round(distFt)} ft`})
+                        {weatherIsImperial
+                          ? `(${distM >= 1000 ? `${(distM / 1000).toFixed(2)} km` : `${Math.round(distM)} m`})`
+                          : `(${distFt >= 5280 ? `${(distFt / 5280).toFixed(2)} mi` : `${Math.round(distFt)} ft`})`}
                       </span>
                     </td>
                     <td className="text-right py-1.5 pr-4 tabular-nums text-gray-500">

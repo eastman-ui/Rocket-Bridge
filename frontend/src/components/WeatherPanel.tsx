@@ -121,13 +121,23 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
   const imp = unitSystem === 'imperial';
   const { data, loading, error } = useWeather(lat, lon, imp);
   const [selectedHour, setSelectedHour] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'launch' | 'now'>('launch');
   const launchSlotRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => { onWeatherData?.(data); }, [data, onWeatherData]);
 
   useEffect(() => {
     setSelectedHour(null);
+    setViewMode('launch');
   }, [launchDateTime]);
+
+  // Current local hour — must be computed before early returns so isLaunchFuture can use it
+  const nowHour = (() => {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    d.setUTCMinutes(0, 0, 0);
+    return d.toISOString().slice(0, 16);
+  })();
 
   if (!lat || !lon) return null;
 
@@ -149,9 +159,12 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
   const { hourly } = data;
   const siteElevM = data.elevation ?? elevationM;
 
-  // Find selected/launch hour index — clicking hourly strip overrides launch time
   const launchHour = launchDateTime.slice(0, 16); // "2025-08-01T14:00"
-  const activeHour = selectedHour ?? launchHour;
+  const isLaunchFuture = launchHour > nowHour;
+
+  // viewMode drives the base hour; selectedHour (hourly strip click) overrides both
+  const baseHour = viewMode === 'now' ? nowHour : launchHour;
+  const activeHour = selectedHour ?? baseHour;
   let hourIdx = (hourly.time as string[]).findIndex(t => t === activeHour);
   if (hourIdx < 0) hourIdx = 0; // fallback to first available
 
@@ -272,19 +285,11 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
     }))
     .reverse(); // high altitude at top
 
-  // ─── Hourly strip for the selected date ──────────────────────────────────────
-  const selectedDate = launchHour.slice(0, 10); // "2025-08-01"
+  // ─── Hourly strip for the active date ────────────────────────────────────────
+  const selectedDate = baseHour.slice(0, 10);
   const dayHours = (hourly.time as string[])
     .map((t, i) => ({ t, i }))
     .filter(({ t }) => t.startsWith(selectedDate));
-
-  // Current local hour in "YYYY-MM-DDTHH:00" format (matches Open-Meteo local timezone)
-  const nowHour = (() => {
-    const d = new Date();
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); // shift so UTC = local
-    d.setUTCMinutes(0, 0, 0);                             // round to hour
-    return d.toISOString().slice(0, 16);
-  })();
 
   // ─── Launch time summary ──────────────────────────────────────────────────────
   const launchTemp = (hourly.temperature_2m as number[])[hourIdx];
@@ -307,9 +312,45 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
 
   return (
     <div className="bg-gray-900 rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Launch Window Weather</h2>
-        <span className="text-xs text-gray-600">{lat.toFixed(3)}, {lon.toFixed(3)}</span>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Launch Window Weather</h2>
+          {viewMode === 'launch' && isLaunchFuture && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-900/40 border border-blue-700/50 text-blue-400 font-medium tracking-wide">
+              Open-Meteo GFS 7-day forecast
+            </span>
+          )}
+          {viewMode === 'now' && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-900/40 border border-green-700/50 text-green-400 font-medium tracking-wide">
+              Current conditions
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => { setViewMode('now'); setSelectedHour(null); }}
+            className={`text-xs px-3 py-1 rounded-l-lg border transition-colors ${
+              viewMode === 'now'
+                ? 'bg-green-700/30 border-green-600/50 text-green-300'
+                : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            Now
+          </button>
+          <button
+            type="button"
+            onClick={() => { setViewMode('launch'); setSelectedHour(null); }}
+            className={`text-xs px-3 py-1 rounded-r-lg border-t border-b border-r transition-colors ${
+              viewMode === 'launch'
+                ? 'bg-blue-700/30 border-blue-600/50 text-blue-300'
+                : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            At Launch
+          </button>
+          <span className="ml-2 text-xs text-gray-600">{lat.toFixed(3)}, {lon.toFixed(3)}</span>
+        </div>
       </div>
 
       {/* Launch time summary */}
@@ -334,7 +375,8 @@ export function WeatherPanel({ lat, lon, elevationM, launchDateTime, unitSystem,
       {/* Wind aloft + cloud table */}
       <div>
         <p className="text-xs text-gray-600 mb-1 uppercase tracking-wide font-medium">
-          Wind Aloft &amp; Clouds — {activeHour.replace('T', ' ')} local · click hour below to update
+          Wind Aloft &amp; Clouds — {activeHour.replace('T', ' ')} local
+          {viewMode === 'launch' && isLaunchFuture ? ' · GFS forecast' : ' · click hour below to update'}
         </p>
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3 items-start">
           {/* Wind chart */}
